@@ -8,6 +8,7 @@
     <RootNamespace>NativeSpy.Agent.WinForms</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\NativeSpy.Agent\NativeSpy.Agent.csproj" />
     <ProjectReference Include="..\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
   </ItemGroup>
 </Project>

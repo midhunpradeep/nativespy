@@ -60,11 +60,16 @@ public sealed class WinFormsButtonCorrelationTests
             "System.Windows.Forms.Button",
             managed.TypeIdentity?.FullName);
         Assert.Equal(managed.Handle.BoundaryId, managed.TypeIdentity?.BoundaryId);
-        Assert.StartsWith("i1-type-", managed.TypeIdentity?.TypeId);
+        Assert.StartsWith("clr-type-", managed.TypeIdentity?.TypeId);
         Assert.NotEqual(managed.TypeIdentity?.FullName, managed.TypeIdentity?.TypeId);
 
         var secondManaged = Assert.IsType<ManagedObjectRefDto>(
             Assert.Single(secondResult.Candidates).Target.Managed);
+        Assert.Equal(managed.Handle.SessionId, secondManaged.Handle.SessionId);
+        Assert.Equal(managed.Handle.HandleId, secondManaged.Handle.HandleId);
+        Assert.Equal(managed.Handle.Generation, secondManaged.Handle.Generation);
+        Assert.Equal(managed.Handle.Kind, secondManaged.Handle.Kind);
+        Assert.Equal(managed.Handle.BoundaryId, secondManaged.Handle.BoundaryId);
         Assert.Equal(managed.TypeIdentity?.TypeId, secondManaged.TypeIdentity?.TypeId);
 
         var formEvidence = target.Begin(target.MainWindowHwnd);
@@ -85,7 +90,9 @@ public sealed class WinFormsButtonCorrelationTests
             managed.Handle.Generation + 1,
             managed.Handle.Kind,
             managed.Handle.BoundaryId);
-        Assert.Throws<InvalidOperationException>(() => target.ReadText(forgedGeneration));
+        var forgedException = Assert.Throws<TestTargetOperationException>(
+            () => target.ReadText(forgedGeneration));
+        Assert.Equal(OperationErrorCode.StaleHandle, forgedException.Code);
 
         var text = target.ReadText(managed.Handle);
         Assert.Equal("NativeSpy Test Button", text);

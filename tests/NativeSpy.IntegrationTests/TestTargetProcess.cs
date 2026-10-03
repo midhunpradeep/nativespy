@@ -6,6 +6,17 @@ using NativeSpy.Protocol.Correlation;
 
 namespace NativeSpy.IntegrationTests;
 
+internal sealed class TestTargetOperationException : InvalidOperationException
+{
+    public TestTargetOperationException(OperationErrorCode? code, string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    public OperationErrorCode? Code { get; }
+}
+
 internal sealed class TestTargetProcess : IDisposable
 {
     private const int ReadTimeoutMilliseconds = 10_000;
@@ -118,7 +129,13 @@ internal sealed class TestTargetProcess : IDisposable
             CandidateHandle: ToWire(candidateHandle)));
         if (!response.Ok || response.Text is null)
         {
-            throw new InvalidOperationException(response.Error ?? "The test target returned no Button.Text value.");
+            var code = response.ErrorCode is int rawCode
+                && Enum.IsDefined(typeof(OperationErrorCode), rawCode)
+                ? (OperationErrorCode)rawCode
+                : (OperationErrorCode?)null;
+            throw new TestTargetOperationException(
+                code,
+                response.Error ?? "The test target returned no Button.Text value.");
         }
 
         return response.Text;
@@ -474,7 +491,8 @@ internal sealed class TestTargetProcess : IDisposable
         bool Ok,
         string? Error,
         TargetEvidenceWire? Evidence,
-        string? Text);
+        string? Text,
+        int? ErrorCode = null);
 
     private sealed record TargetEvidenceWire(
         string AdapterId,

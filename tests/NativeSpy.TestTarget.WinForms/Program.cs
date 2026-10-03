@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
+using NativeSpy.Agent;
 using NativeSpy.Agent.WinForms;
 using NativeSpy.Protocol.Common;
 using NativeSpy.Protocol.Correlation;
@@ -15,13 +16,10 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        var handleTable = new TestManagedHandleTable();
+        using var session = new ClrAgentSession();
         var form = new MainForm();
-        var adapter = new WinFormsCurrentHwndAdapter(
-            handleTable.Issue,
-            handleTable.Resolve,
-            handleTable.GetTypeId);
-        var bridge = new TestTargetBridge(form, adapter, handleTable);
+        var adapter = new WinFormsCurrentHwndAdapter(session);
+        var bridge = new TestTargetBridge(form, adapter, session);
         form.Shown += (_, _) => bridge.SignalReady();
         bridge.Start();
         Application.Run(form);
@@ -51,91 +49,6 @@ internal sealed class MainForm : Form
     public Button TestButton { get; }
 }
 
-internal sealed class TestManagedHandleTable
-{
-    private const string SessionId = "i1-test-session";
-    private const string BoundaryId = "i1-test-target";
-    private readonly Dictionary<object, HandleRefDto> _handlesByObject =
-        new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<string, IssuedHandle> _objectsByHandle = new(StringComparer.Ordinal);
-    private readonly Dictionary<Type, string> _typeIds = new();
-    private int _nextHandleId;
-    private int _nextTypeId;
-
-    public HandleRefDto Issue(object target)
-    {
-        ArgumentNullException.ThrowIfNull(target);
-        if (_handlesByObject.TryGetValue(target, out var existing))
-        {
-            return existing;
-        }
-
-        var handle = new HandleRefDto(
-            SessionId,
-            $"test-object-{++_nextHandleId}",
-            generation: 1,
-            HandleKind.ClrObject,
-            BoundaryId);
-        _handlesByObject.Add(target, handle);
-        _objectsByHandle.Add(handle.HandleId, new IssuedHandle(handle, target));
-        return handle;
-    }
-
-    public string GetTypeId(Type type)
-    {
-        ArgumentNullException.ThrowIfNull(type);
-        if (_typeIds.TryGetValue(type, out var existing))
-        {
-            return existing;
-        }
-
-        var typeId = $"i1-type-{++_nextTypeId}";
-        _typeIds.Add(type, typeId);
-        return typeId;
-    }
-
-    public object? Resolve(HandleRefDto handle)
-    {
-        if (!_objectsByHandle.TryGetValue(handle?.HandleId ?? string.Empty, out var issued)
-            || !IsValidHandle(handle, issued.Handle))
-        {
-            return null;
-        }
-
-        return issued.Target;
-    }
-
-    public string ReadButtonText(HandleRefDto handle)
-    {
-        var target = Resolve(handle)
-            ?? throw new InvalidOperationException("The test handle does not resolve to a live target object.");
-        if (target is not Button button)
-        {
-            throw new InvalidOperationException(
-                $"The resolved target type was '{target.GetType().FullName}', not '{typeof(Button).FullName}'.");
-        }
-
-        return button.Text;
-    }
-
-    private static bool IsValidHandle(HandleRefDto? supplied, HandleRefDto issued)
-    {
-        return supplied is not null
-            && string.Equals(supplied.SessionId, issued.SessionId, StringComparison.Ordinal)
-            && string.Equals(supplied.HandleId, issued.HandleId, StringComparison.Ordinal)
-            && supplied.Generation == issued.Generation
-            && supplied.Kind == issued.Kind
-            && string.Equals(supplied.BoundaryId, issued.BoundaryId, StringComparison.Ordinal)
-            && string.Equals(supplied.SessionId, SessionId, StringComparison.Ordinal)
-            && string.Equals(supplied.BoundaryId, BoundaryId, StringComparison.Ordinal)
-            && supplied.Kind == HandleKind.ClrObject
-            && supplied.Generation > 0
-            && !string.IsNullOrWhiteSpace(supplied.HandleId);
-    }
-
-    private sealed record IssuedHandle(HandleRefDto Handle, object Target);
-}
-
 internal sealed class TestTargetBridge
 {
     private const int MaximumLineLength = 256 * 1024;
@@ -146,7 +59,7 @@ internal sealed class TestTargetBridge
 
     private readonly MainForm _form;
     private readonly WinFormsCurrentHwndAdapter _adapter;
-    private readonly TestManagedHandleTable _handleTable;
+    private readonly IManagedObjectReferenceService _identityService;
     private readonly object _outputGate = new();
     private volatile bool _stopping;
     private Thread? _readerThread;
@@ -154,11 +67,11 @@ internal sealed class TestTargetBridge
     public TestTargetBridge(
         MainForm form,
         WinFormsCurrentHwndAdapter adapter,
-        TestManagedHandleTable handleTable)
+        IManagedObjectReferenceService identityService)
     {
-        _form = form;
-        _adapter = adapter;
-        _handleTable = handleTable;
+        _form = form ?? throw new ArgumentNullException(nameof(form));
+        _adapter = adapter ?? throw new ArgumentNullException(nameof(adapter));
+        _identityService = identityService ?? throw new ArgumentNullException(nameof(identityService));
     }
 
     public void Start()
@@ -302,8 +215,39 @@ internal sealed class TestTargetBridge
             return new BridgeResponse(request.Id, false, "A candidate handle is required.", null, null);
         }
 
-        var text = InvokeOnUi(() => _handleTable.ReadButtonText(ToHandle(request.CandidateHandle)));
-        return new BridgeResponse(request.Id, true, null, null, text);
+        return InvokeOnUi(() =>
+        {
+            var acquisitionResult = _identityService.TryAcquire(ToHandle(request.CandidateHandle));
+            if (!acquisitionResult.IsSuccess)
+            {
+                var error = acquisitionResult.Error
+                    ?? throw new InvalidOperationException(
+                        "The identity service returned an invalid acquisition result.");
+                return new BridgeResponse(
+                    request.Id,
+                    false,
+                    error.Message,
+                    null,
+                    null,
+                    (int)error.Code);
+            }
+
+            using var acquisition = acquisitionResult.Acquisition
+                ?? throw new InvalidOperationException(
+                    "The identity service returned no acquisition for a successful result.");
+            if (acquisition.Target is not Button button)
+            {
+                return new BridgeResponse(
+                    request.Id,
+                    false,
+                    $"The resolved target type was '{acquisition.Target.GetType().FullName}', not '{typeof(Button).FullName}'.",
+                    null,
+                    null,
+                    (int)OperationErrorCode.TargetOperationFailed);
+            }
+
+            return new BridgeResponse(request.Id, true, null, null, button.Text);
+        });
     }
 
     private T InvokeOnUi<T>(Func<T> callback)
@@ -512,7 +456,8 @@ internal sealed class TestTargetBridge
         bool Ok,
         string? Error,
         TargetEvidenceWire? Evidence,
-        string? Text);
+        string? Text,
+        int? ErrorCode = null);
 
     private sealed record TargetEvidenceWire(
         string AdapterId,

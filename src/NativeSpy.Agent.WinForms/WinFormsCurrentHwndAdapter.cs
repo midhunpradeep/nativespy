@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using NativeSpy.Agent;
 using NativeSpy.Protocol.Common;
 using NativeSpy.Protocol.Correlation;
 
@@ -11,18 +12,11 @@ namespace NativeSpy.Agent.WinForms;
 /// </summary>
 public sealed class WinFormsCurrentHwndAdapter
 {
-    private readonly Func<object, HandleRefDto> _issueHandle;
-    private readonly Func<HandleRefDto, object?> _resolveHandle;
-    private readonly Func<Type, string> _typeIdProvider;
+    private readonly IManagedObjectReferenceService _identityService;
 
-    public WinFormsCurrentHwndAdapter(
-        Func<object, HandleRefDto> issueHandle,
-        Func<HandleRefDto, object?> resolveHandle,
-        Func<Type, string> typeIdProvider)
+    public WinFormsCurrentHwndAdapter(IManagedObjectReferenceService identityService)
     {
-        _issueHandle = issueHandle ?? throw new ArgumentNullException(nameof(issueHandle));
-        _resolveHandle = resolveHandle ?? throw new ArgumentNullException(nameof(resolveHandle));
-        _typeIdProvider = typeIdProvider ?? throw new ArgumentNullException(nameof(typeIdProvider));
+        _identityService = identityService ?? throw new ArgumentNullException(nameof(identityService));
     }
 
     public FrameworkCorrelationEvidenceDto BeginCurrentHwnd(ulong hwnd)
@@ -32,9 +26,23 @@ public sealed class WinFormsCurrentHwndAdapter
             var control = FindControl(hwnd);
             var current = IsCurrentControl(control, hwnd);
             var live = IsLiveControl(control, hwnd);
-            var candidateTarget = control is null
-                ? null
-                : CreateCandidateTarget(_issueHandle(control), control.GetType());
+            CorrelationTargetRefDto? candidateTarget = null;
+            if (control is not null)
+            {
+                var registration = _identityService.Register(control);
+                if (!registration.IsSuccess)
+                {
+                    return CreateFailureEvidence(
+                        hwnd,
+                        registration.Error ?? throw new InvalidOperationException(
+                            "The identity service returned an invalid registration result."),
+                        "WinForms.Control.FromHandle");
+                }
+
+                candidateTarget = new CorrelationTargetRefDto(
+                    CorrelationTargetKind.ManagedObject,
+                    managed: registration.Reference);
+            }
 
             return CreateEvidence(
                 hwnd,
@@ -67,26 +75,34 @@ public sealed class WinFormsCurrentHwndAdapter
 
         try
         {
-            var resolvedCandidate = _resolveHandle(candidateHandle);
+            var acquisitionResult = _identityService.TryAcquire(candidateHandle);
+            if (!acquisitionResult.IsSuccess)
+            {
+                return CreateAcquisitionFailureEvidence(
+                    hwnd,
+                    acquisitionResult.Error ?? throw new InvalidOperationException(
+                        "The identity service returned an invalid acquisition result."));
+            }
+
+            using var acquisition = acquisitionResult.Acquisition
+                ?? throw new InvalidOperationException(
+                    "The identity service returned no acquisition for a successful result.");
+            var resolvedCandidate = acquisition.Target;
             var currentControl = FindControl(hwnd);
             var current = IsCurrentControl(currentControl, hwnd);
             var live = IsLiveControl(currentControl, hwnd);
-            var referenceEqual = resolvedCandidate is Control candidateControl
-                && currentControl is not null
-                && ReferenceEquals(candidateControl, currentControl);
-            var candidateResolved = resolvedCandidate is not null;
+            var referenceEqual = currentControl is not null
+                && ReferenceEquals(resolvedCandidate, currentControl);
 
             return CreateEvidence(
                 hwnd,
                 candidateTarget: null,
                 new[]
                 {
-                    Evidence(
-                        "CandidateResolved",
-                        candidateResolved ? ProofOutcome.Passed : ProofOutcome.NotAvailable),
+                    Evidence("CandidateResolved", ProofOutcome.Passed),
                     Evidence(
                         "ControlFromHandleReferenceEqual",
-                        candidateResolved && currentControl is not null
+                        currentControl is not null
                             ? referenceEqual ? ProofOutcome.Passed : ProofOutcome.Failed
                             : ProofOutcome.NotAvailable),
                     Evidence("ControlFromHandle", currentControl is null ? ProofOutcome.Failed : ProofOutcome.Passed),
@@ -95,15 +111,9 @@ public sealed class WinFormsCurrentHwndAdapter
                 },
                 new[]
                 {
-                    Validation(
-                        "CandidateResolved",
-                        candidateResolved ? ValidationOutcome.Passed : ValidationOutcome.Changed),
-                    Validation(
-                        "CurrentHwndMatches",
-                        current ? ValidationOutcome.Passed : ValidationOutcome.Changed),
-                    Validation(
-                        "ControlLive",
-                        live ? ValidationOutcome.Passed : ValidationOutcome.Changed)
+                    Validation("CandidateResolved", ValidationOutcome.Passed),
+                    Validation("CurrentHwndMatches", current ? ValidationOutcome.Passed : ValidationOutcome.Changed),
+                    Validation("ControlLive", live ? ValidationOutcome.Passed : ValidationOutcome.Changed)
                 },
                 currentControl,
                 operationName: "WinForms.Control.FromHandle.Revalidate");
@@ -120,7 +130,8 @@ public sealed class WinFormsCurrentHwndAdapter
         IEnumerable<CorrelationEvidenceFactDto> evidenceFacts,
         IEnumerable<CorrelationValidationFactDto> validationFacts,
         Control? control,
-        string operationName)
+        string operationName,
+        OperationErrorDto? operationError = null)
     {
         return new FrameworkCorrelationEvidenceDto(
             "winforms",
@@ -136,12 +147,24 @@ public sealed class WinFormsCurrentHwndAdapter
                 VisibleMutationEffect.NotRequested,
                 new[] { operationName }),
             new[] { CreateMetadata(hwnd, control) },
-            Array.Empty<CorrelationLimitationDto>());
+            Array.Empty<CorrelationLimitationDto>(),
+            operationError);
     }
 
     private FrameworkCorrelationEvidenceDto CreateFailureEvidence(
         ulong hwnd,
         Exception exception,
+        string operationName)
+    {
+        return CreateFailureEvidence(
+            hwnd,
+            new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message),
+            operationName);
+    }
+
+    private FrameworkCorrelationEvidenceDto CreateFailureEvidence(
+        ulong hwnd,
+        OperationErrorDto operationError,
         string operationName)
     {
         return new FrameworkCorrelationEvidenceDto(
@@ -150,13 +173,13 @@ public sealed class WinFormsCurrentHwndAdapter
             candidateTarget: null,
             new[]
             {
-                Evidence("ControlFromHandle", ProofOutcome.NotAvailable, exception.Message)
+                Evidence("ControlFromHandle", ProofOutcome.NotAvailable, operationError.Message)
             },
             new[]
             {
-                Validation("CurrentHwndMatches", ValidationOutcome.NotAvailable, exception.Message),
-                Validation("ControlLive", ValidationOutcome.NotAvailable, exception.Message),
-                Validation("CandidateResolved", ValidationOutcome.NotAvailable, exception.Message)
+                Validation("CurrentHwndMatches", ValidationOutcome.NotAvailable, operationError.Message),
+                Validation("ControlLive", ValidationOutcome.NotAvailable, operationError.Message),
+                Validation("CandidateResolved", ValidationOutcome.NotAvailable, operationError.Message)
             },
             new CorrelationEffectSummaryDto(
                 new[] { EffectCategory.Passive },
@@ -166,27 +189,50 @@ public sealed class WinFormsCurrentHwndAdapter
                 VisibleMutationEffect.NotRequested,
                 new[] { operationName }),
             new[] { CreateMetadata(hwnd, control: null) },
-            new[] { new CorrelationLimitationDto("WinFormsTargetOperationFailed", exception.Message) },
-            new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));
+            new[]
+            {
+                new CorrelationLimitationDto(
+                    operationError.Code == OperationErrorCode.TargetOperationFailed
+                        ? "WinFormsTargetOperationFailed"
+                        : "AgentIdentityOperationFailed",
+                    operationError.Message)
+            },
+            operationError);
     }
 
-    private CorrelationTargetRefDto CreateCandidateTarget(
-        HandleRefDto handle,
-        Type type)
+    private FrameworkCorrelationEvidenceDto CreateAcquisitionFailureEvidence(
+        ulong hwnd,
+        OperationErrorDto operationError)
     {
-        if (handle.Kind != HandleKind.ClrObject)
-        {
-            throw new InvalidOperationException("The supplied handle issuer returned a non-ClrObject handle.");
-        }
-
-        var boundaryId = handle.BoundaryId
-            ?? throw new InvalidOperationException("The supplied handle issuer returned no runtime boundary ID.");
-        return new CorrelationTargetRefDto(
-            CorrelationTargetKind.ManagedObject,
-            managed: new ManagedObjectRefDto(
-                handle,
-                CreateTypeIdentity(type, boundaryId),
-                boundaryId));
+        var candidateResolution = operationError.Code is
+            OperationErrorCode.InvalidHandle
+            or OperationErrorCode.StaleHandle
+            or OperationErrorCode.ObjectCollected
+            ? ValidationOutcome.Changed
+            : ValidationOutcome.NotAvailable;
+        return new FrameworkCorrelationEvidenceDto(
+            "winforms",
+            Process.GetCurrentProcess().Id,
+            candidateTarget: null,
+            new[]
+            {
+                Evidence("CandidateResolved", ProofOutcome.NotAvailable, operationError.Message),
+                Evidence("ControlFromHandleReferenceEqual", ProofOutcome.NotAvailable, operationError.Message)
+            },
+            new[]
+            {
+                Validation("CandidateResolved", candidateResolution, operationError.Message)
+            },
+            new CorrelationEffectSummaryDto(
+                new[] { EffectCategory.Passive },
+                FrameworkStateEffect.None,
+                ApplicationCallbackEffect.None,
+                Array.Empty<CallbackDetailDto>(),
+                VisibleMutationEffect.NotRequested,
+                new[] { "NativeSpy.Agent.TryAcquire" }),
+            Array.Empty<AdapterMetadataDto>(),
+            Array.Empty<CorrelationLimitationDto>(),
+            operationError);
     }
 
     private static Control? FindControl(ulong hwnd)
@@ -212,29 +258,6 @@ public sealed class WinFormsCurrentHwndAdapter
     private static bool IsLiveControl(Control? control, ulong hwnd)
     {
         return IsCurrentControl(control, hwnd);
-    }
-
-    private TypeIdentityDto CreateTypeIdentity(Type type, string boundaryId)
-    {
-        var fullName = type.FullName ?? type.Name;
-        var assembly = type.Assembly.GetName();
-        var assemblyName = assembly.Name ?? type.Assembly.FullName ?? type.Name;
-        var typeId = _typeIdProvider(type);
-        if (string.IsNullOrWhiteSpace(typeId))
-        {
-            throw new InvalidOperationException("The type-ID provider returned an empty session-local type ID.");
-        }
-
-        return new TypeIdentityDto(
-            typeId,
-            fullName,
-            assemblyName,
-            boundaryId,
-            type.IsValueType,
-            Array.Empty<TypeRefDto>(),
-            Array.Empty<TypeRefDto>(),
-            assemblyVersion: assembly.Version?.ToString(),
-            moduleVersionId: type.Module.ModuleVersionId.ToString("D"));
     }
 
     private static AdapterMetadataDto CreateMetadata(ulong hwnd, Control? control)

@@ -16,6 +16,50 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
+    public void Managed_object_reference_requires_consistent_runtime_boundaries()
+    {
+        var handle = CreateHandle();
+        var type = new TypeIdentityDto(
+            "type",
+            "Example.Type",
+            "Example",
+            "other-boundary",
+            isValueType: false,
+            Array.Empty<TypeRefDto>(),
+            Array.Empty<TypeRefDto>());
+
+        Assert.Throws<ArgumentException>(() => new ManagedObjectRefDto(handle, type));
+        Assert.Throws<ArgumentException>(() => new ManagedObjectRefDto(handle, boundaryId: "other-boundary"));
+        Assert.Throws<ArgumentException>(() => new ManagedObjectRefDto(
+            new HandleRefDto("session", "handle", 1, HandleKind.ClrObject),
+            type));
+
+        var valid = new ManagedObjectRefDto(
+            handle,
+            new TypeIdentityDto(
+                "type",
+                "Example.Type",
+                "Example",
+                "boundary",
+                isValueType: false,
+                Array.Empty<TypeRefDto>(),
+                Array.Empty<TypeRefDto>()),
+            boundaryId: "boundary");
+        Assert.Equal("boundary", valid.BoundaryId);
+    }
+
+    [Fact]
+    public void Object_lifecycle_error_codes_are_defined()
+    {
+        Assert.Equal(
+            OperationErrorCode.ObjectCollected,
+            new OperationErrorDto(OperationErrorCode.ObjectCollected).Code);
+        Assert.Equal(
+            OperationErrorCode.RuntimeUnavailable,
+            new OperationErrorDto(OperationErrorCode.RuntimeUnavailable).Code);
+    }
+
+    [Fact]
     public void Target_envelope_requires_exactly_one_matching_payload()
     {
         var managed = new ManagedObjectRefDto(CreateHandle());

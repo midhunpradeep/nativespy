@@ -13,5 +13,7 @@ public enum OperationErrorCode
     CapabilityUnavailable,
     DisabledByPolicy,
     SerializationLimit,
-    TargetExited
+    TargetExited,
+    ObjectCollected,
+    RuntimeUnavailable
 }
