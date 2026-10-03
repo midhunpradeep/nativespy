@@ -77,4 +77,4 @@ For NativeSpy implementation changes, also update `PROJECT_STATE.md` and relevan
 
 ## Scope guardrails
 
-Do not start a future iteration merely because it would be convenient. In particular, I0 deliberately contains no FlaUI, UIA, WPF, WinForms, agent, IPC, attach layer, serialization codec, or ObjectSpy implementation.
+Do not start a future iteration merely because it would be convenient. I1 deliberately stops at the test-only UIA3/FlaUI-to-WinForms walking skeleton. Production transport, attach/bootstrap, handle lifetime/registry, WPF, UIA2, ProviderAware behavior, serialization, reflection/member inspection, and ObjectSpy remain out of scope until separately confirmed.

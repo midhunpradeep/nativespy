@@ -22,13 +22,15 @@ NativeSpy keeps correlation separate from identity. Managed objects use opaque, 
 
 ## Current state
 
-This repository contains **Iteration 0 only**:
+This repository contains **Iteration 1 — the WinForms/FlaUI walking skeleton**:
 
-- `NativeSpy.Protocol` (`netstandard2.0`) — framework-neutral correlation DTOs and contract invariants;
-- `NativeSpy.Client` (`net10.0`) — normalized proof requirements and one pure certainty evaluator;
-- Protocol and Client xUnit tests covering the decision table and architectural tripwires.
+- `NativeSpy.Protocol` (`netstandard2.0`) — detached evidence, validation, policy, and operation-error DTOs;
+- `NativeSpy.Client` (`net10.0`) — asynchronous evidence ports, current-HWND normalization, orchestration, and the unchanged pure certainty evaluator;
+- `NativeSpy.FlaUI` (`net10.0-windows`) — UIA3 attachment, AutomationId lookup, HWND observation, and FlaUI element equality facts;
+- `NativeSpy.Agent.WinForms` (`net10.0-windows`) — synchronous target-side `Control.FromHandle`/`ReferenceEquals` evidence;
+- `NativeSpy.TestTarget.WinForms` and `NativeSpy.IntegrationTests` — deterministic test-only WinForms process, bounded JSON Lines bridge, and live end-to-end proof.
 
-There is no FlaUI/UIA integration, WPF or WinForms adapter, agent, transport, attach layer, or object inspection implementation yet.
+The supported I1 path is UIA3 `UiaToNative` correlation under explicit `Conservative` policy. It returns `Exact + SameManagedElement` only after initial and revalidated UIA equality, current-HWND WinForms lookup, and CLR reference equality. Transport, attach/bootstrap, handle lifetime/registry, WPF, UIA2, ProviderAware, and ObjectSpy remain deferred.
 
 ## Build and test
 
@@ -52,4 +54,4 @@ Exact | HighConfidence | Ambiguous | NoDirectMapping | Unresolved
 
 Evidence is normalized into Client-owned proof requirements before evaluation. `Conservative` and explicit `ProviderAware` policy hints never cause automatic escalation. Effects, relationships, target kinds, and metadata remain independent of certainty status.
 
-See [`PROJECT_STATE.md`](PROJECT_STATE.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), and [`docs/ITERATION-0-IMPLEMENTATION-NOTES.md`](docs/ITERATION-0-IMPLEMENTATION-NOTES.md) for project status, contribution/Git conventions, and design notes.
+See [`PROJECT_STATE.md`](PROJECT_STATE.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/ITERATION-0-IMPLEMENTATION-NOTES.md`](docs/ITERATION-0-IMPLEMENTATION-NOTES.md), and [`docs/ITERATION-1-IMPLEMENTATION-NOTES.md`](docs/ITERATION-1-IMPLEMENTATION-NOTES.md) for project status, contribution/Git conventions, and design notes.

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PlatformTarget>x64</PlatformTarget>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>NativeSpy.IntegrationTests</AssemblyName>
+    <RootNamespace>NativeSpy.IntegrationTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\NativeSpy.Client\NativeSpy.Client.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.FlaUI\NativeSpy.FlaUI.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
+    <ProjectReference Include="..\NativeSpy.TestTarget.WinForms\NativeSpy.TestTarget.WinForms.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+  <Target Name="CopyTestTargetArtifacts" AfterTargets="Build">
+    <ItemGroup>
+      <TestTargetArtifacts Include="..\NativeSpy.TestTarget.WinForms\bin\$(Configuration)\net10.0-windows\*.*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(TestTargetArtifacts)"
+      DestinationFiles="@(TestTargetArtifacts->'$(OutputPath)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+</Project>
