@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>NativeSpy.Protocol</AssemblyName>
+    <RootNamespace>NativeSpy.Protocol</RootNamespace>
+  </PropertyGroup>
+</Project>

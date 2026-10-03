@@ -1,0 +1,19 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+
+# Test and coverage output
+TestResults/
+.coverage
+coverage/
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Generated SDK files
+*.nupkg
+*.snupkg

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>NativeSpy.Client</AssemblyName>
+    <RootNamespace>NativeSpy.Client</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="NativeSpy.Client.Tests" />
+  </ItemGroup>
+</Project>
