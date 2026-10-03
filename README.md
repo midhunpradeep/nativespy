@@ -52,4 +52,4 @@ Exact | HighConfidence | Ambiguous | NoDirectMapping | Unresolved
 
 Evidence is normalized into Client-owned proof requirements before evaluation. `Conservative` and explicit `ProviderAware` policy hints never cause automatic escalation. Effects, relationships, target kinds, and metadata remain independent of certainty status.
 
-See [`PROJECT_STATE.md`](PROJECT_STATE.md) and [`docs/ITERATION-0-IMPLEMENTATION-NOTES.md`](docs/ITERATION-0-IMPLEMENTATION-NOTES.md) for the implementation status and design notes.
+See [`PROJECT_STATE.md`](PROJECT_STATE.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), and [`docs/ITERATION-0-IMPLEMENTATION-NOTES.md`](docs/ITERATION-0-IMPLEMENTATION-NOTES.md) for project status, contribution/Git conventions, and design notes.
