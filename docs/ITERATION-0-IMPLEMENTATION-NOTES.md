@@ -74,7 +74,7 @@ status + optional primary candidate
 
 The public proof summary is a reporting DTO. The internal `CorrelationCandidateAssessment` owns normalized proof and validation facts so the evaluator does not accidentally derive policy from a framework adapter's labels or from an optional reporting summary. `Candidate.Validation.Revalidated` remains the single lifecycle revalidation flag.
 
-`ProofRequirement` requires an exact step name/evidence-kind match. Only a deterministic requirement may explicitly allow `NotAvailable` to qualify for `HighConfidence`. Missing facts are valid incomplete runtime evidence and resolve conservatively; duplicate normalized keys and invalid requirement configuration are rejected as programming errors.
+`ProofRequirement` requires an exact step name/evidence-kind match. Only a deterministic requirement may explicitly allow `NotAvailable` to qualify for `HighConfidence`. Missing facts are valid incomplete runtime evidence and resolve conservatively; duplicate normalized keys and invalid requirement configuration are rejected as programming errors. `Exact` additionally requires at least one deterministic Exact requirement.
 
 ## Evaluator control flow
 
@@ -83,8 +83,8 @@ The public proof summary is a reporting DTO. The internal `CorrelationCandidateA
 3. A required proof or validation conflict returns `Ambiguous`.
 4. No candidates without positive semantic absence returns `Unresolved`.
 5. One candidate must have all required validation checks passing and `Candidate.Validation.Revalidated == true`.
-6. At least one exact proof requirement is required for `Exact`, and every required proof passes.
-7. Otherwise, `HighConfidence` requires strong normalized evidence, one permitted unavailable deterministic requirement, every other required proof passing, and current validation.
+6. At least one deterministic Exact proof requirement is required for `Exact`, and every required proof passes.
+7. Otherwise, `HighConfidence` requires strong normalized evidence, at least one permitted unavailable deterministic requirement, every other required proof passing, and current validation.
 8. All other cases return `Unresolved`.
 
 Effects, target kinds, relationships, metadata, policy hints, and non-required diagnostic facts never select a status. ProviderAware is never run automatically.
@@ -102,7 +102,9 @@ Effects, target kinds, relationships, metadata, policy hints, and non-required d
 - A complete one-candidate proof/currentness path returns `Exact` and one primary.
 - Two candidates remain `Ambiguous` even when proof appears complete, preventing heuristic selection.
 - Required proof and validation conflicts are `Ambiguous`, while unrelated diagnostic conflicts do not invalidate required proof.
-- An allowed unavailable deterministic step plus strong/current evidence returns `HighConfidence`; failed, not-attempted, structural, or unpermitted absence does not.
+- One or more allowed unavailable deterministic steps plus strong/current evidence return `HighConfidence`; failed, not-attempted, structural, or unpermitted absence does not.
+- Structural, descriptive, or geometry-only Exact requirements remain `Unresolved`; at least one deterministic Exact requirement is required.
+- Representative undefined closed-enum values are rejected at Protocol DTO boundaries with `ArgumentOutOfRangeException`.
 - Changed, unavailable, failed, or incomplete lifecycle validation returns `Unresolved`, and revalidation is read from `CorrelationValidationDto`.
 - Positive semantic absence is the only route to `NoDirectMapping`; an empty candidate set alone is `Unresolved`.
 - RuntimeId-like, descriptive, geometry, relationship, metadata, and effect facts cannot define Exact without normalized requirements.

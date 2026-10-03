@@ -10,7 +10,7 @@ public sealed class ValidationCheckDto
         string? publicDetail = null)
     {
         Name = ContractValidation.RequiredIdentifier(name, nameof(name));
-        Outcome = outcome;
+        Outcome = ContractValidation.RequireDefinedEnum(outcome, nameof(outcome));
         PublicDetail = ContractValidation.OptionalText(publicDetail, nameof(publicDetail));
     }
 

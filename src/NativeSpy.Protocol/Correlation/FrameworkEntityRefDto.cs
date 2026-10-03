@@ -13,7 +13,7 @@ public sealed class FrameworkEntityRefDto
         AdapterMetadataDto? adapterMetadata = null)
     {
         AdapterId = ContractValidation.RequiredIdentifier(adapterId, nameof(adapterId));
-        EntityKind = entityKind;
+        EntityKind = ContractValidation.RequireDefinedEnum(entityKind, nameof(entityKind));
         if (liveHandle is not null && liveHandle.Kind != HandleKind.AgentEntity)
         {
             throw new ArgumentException("A framework entity live handle must be an AgentEntity handle.", nameof(liveHandle));

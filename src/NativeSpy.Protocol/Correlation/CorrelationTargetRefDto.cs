@@ -1,3 +1,5 @@
+using NativeSpy.Protocol.Common;
+
 namespace NativeSpy.Protocol.Correlation;
 
 public sealed class CorrelationTargetRefDto
@@ -8,7 +10,7 @@ public sealed class CorrelationTargetRefDto
         FrameworkEntityRefDto? framework = null,
         NativeEntityRefDto? native = null)
     {
-        TargetKind = targetKind;
+        TargetKind = ContractValidation.RequireDefinedEnum(targetKind, nameof(targetKind));
         Managed = managed;
         Framework = framework;
         Native = native;

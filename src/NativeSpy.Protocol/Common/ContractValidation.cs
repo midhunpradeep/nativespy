@@ -2,6 +2,17 @@ namespace NativeSpy.Protocol.Common;
 
 internal static class ContractValidation
 {
+    public static TEnum RequireDefinedEnum<TEnum>(TEnum value, string parameterName)
+        where TEnum : struct
+    {
+        if (!typeof(TEnum).IsEnum || !Enum.IsDefined(typeof(TEnum), value))
+        {
+            throw new ArgumentOutOfRangeException(parameterName, value, "The enum value is not defined.");
+        }
+
+        return value;
+    }
+
     public static string RequiredIdentifier(string? value, string parameterName)
     {
         if (value is null)
@@ -78,6 +89,20 @@ internal static class ContractValidation
             {
                 throw new ArgumentException("Collection entries must be unique.", parameterName);
             }
+        }
+
+        return copy;
+    }
+
+    public static IReadOnlyList<TEnum> CopyDefinedEnums<TEnum>(
+        IEnumerable<TEnum>? values,
+        string parameterName)
+        where TEnum : struct
+    {
+        var copy = CopyRequired(values, parameterName);
+        foreach (var value in copy)
+        {
+            RequireDefinedEnum(value, parameterName);
         }
 
         return copy;

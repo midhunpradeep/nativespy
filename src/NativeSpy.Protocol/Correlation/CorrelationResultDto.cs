@@ -20,8 +20,8 @@ public sealed class CorrelationResultDto
         CorrelationPolicyMode? requiredPolicy = null,
         OperationErrorDto? operationError = null)
     {
-        Status = status;
-        Direction = direction;
+        Status = ContractValidation.RequireDefinedEnum(status, nameof(status));
+        Direction = ContractValidation.RequireDefinedEnum(direction, nameof(direction));
         Policy = policy ?? throw new ArgumentNullException(nameof(policy));
         Source = source ?? throw new ArgumentNullException(nameof(source));
         Candidates = ContractValidation.CopyRequired(candidates, nameof(candidates));
@@ -33,7 +33,9 @@ public sealed class CorrelationResultDto
         Conflicts = ContractValidation.CopyRequired(conflicts, nameof(conflicts));
         Limitations = ContractValidation.CopyRequired(limitations, nameof(limitations));
         DeeperProofAvailable = deeperProofAvailable;
-        RequiredPolicy = requiredPolicy;
+        RequiredPolicy = requiredPolicy is null
+            ? null
+            : ContractValidation.RequireDefinedEnum(requiredPolicy.Value, nameof(requiredPolicy));
         OperationError = operationError;
 
         ValidateSelection();

@@ -177,6 +177,57 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
+    public void Undefined_closed_enum_values_are_rejected_at_protocol_boundaries()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new HandleRefDto("session", "handle", 1, (HandleKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new OperationErrorDto((OperationErrorCode)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationPolicyDto((CorrelationPolicyMode)999, 1, 1, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ProofStepDto("proof", (ProofOutcome)999, EvidenceKind.Deterministic));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ProofStepDto("proof", ProofOutcome.Passed, (EvidenceKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ValidationCheckDto("validation", (ValidationOutcome)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationEvidenceSummaryDto("evidence", (EvidenceKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationTargetRefDto((CorrelationTargetKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationSourceDto((CorrelationSourceKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new FrameworkEntityRefDto("wpf", (FrameworkEntityKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new NativeEntityRefDto((NativeBoundaryKind)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new RelationshipClaimDto((RelationshipKind)999, CreateTarget(), RelationshipScope.CurrentObservation));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new RelationshipClaimDto(RelationshipKind.SameManagedElement, CreateTarget(), (RelationshipScope)999));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationProofSummaryDto((CorrelationProofMethod)999, Array.Empty<ProofStepDto>(), Array.Empty<ValidationCheckDto>(), Array.Empty<CorrelationLimitationDto>(), true));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationEffectSummaryDto(new[] { (EffectCategory)999 }, FrameworkStateEffect.None, ApplicationCallbackEffect.None, Array.Empty<CallbackDetailDto>(), VisibleMutationEffect.NotRequested, Array.Empty<string>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationEffectSummaryDto(new[] { EffectCategory.Passive }, (FrameworkStateEffect)999, ApplicationCallbackEffect.None, Array.Empty<CallbackDetailDto>(), VisibleMutationEffect.NotRequested, Array.Empty<string>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationEffectSummaryDto(new[] { EffectCategory.Passive }, FrameworkStateEffect.None, (ApplicationCallbackEffect)999, Array.Empty<CallbackDetailDto>(), VisibleMutationEffect.NotRequested, Array.Empty<string>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationEffectSummaryDto(new[] { EffectCategory.Passive }, FrameworkStateEffect.None, ApplicationCallbackEffect.None, Array.Empty<CallbackDetailDto>(), (VisibleMutationEffect)999, Array.Empty<string>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationDirectionCapabilityDto((CorrelationDirection)999, Array.Empty<RelationshipKind>(), CorrelationCapabilityMode.Direct, CorrelationPolicyMode.Conservative, 1, false, false, Array.Empty<CorrelationLimitationDto>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationDirectionCapabilityDto(CorrelationDirection.UiaToNative, Array.Empty<RelationshipKind>(), (CorrelationCapabilityMode)999, CorrelationPolicyMode.Conservative, 1, false, false, Array.Empty<CorrelationLimitationDto>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationDirectionCapabilityDto(CorrelationDirection.UiaToNative, Array.Empty<RelationshipKind>(), CorrelationCapabilityMode.Direct, (CorrelationPolicyMode)999, 1, false, false, Array.Empty<CorrelationLimitationDto>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CorrelationDirectionCapabilityDto(CorrelationDirection.UiaToNative, new[] { (RelationshipKind)999 }, CorrelationCapabilityMode.Direct, CorrelationPolicyMode.Conservative, 1, false, false, Array.Empty<CorrelationLimitationDto>()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CreateResult((CorrelationStatus)999, new[] { CreateCandidate("c1") }, null, policy: CreatePolicy()));
+    }
+
+    [Fact]
     public void Relationship_claim_has_no_status_or_confidence_field()
     {
         var propertyNames = typeof(RelationshipClaimDto)

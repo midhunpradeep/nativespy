@@ -113,7 +113,8 @@ internal sealed class CorrelationEvaluator
 
     private static bool ExactProofPasses(CorrelationCandidateAssessment assessment)
     {
-        if (assessment.ExactRequirements.Count == 0)
+        if (assessment.ExactRequirements.Count == 0
+            || !assessment.ExactRequirements.Any(static requirement => requirement.EvidenceKind == EvidenceKind.Deterministic))
         {
             return false;
         }
@@ -162,7 +163,7 @@ internal sealed class CorrelationEvaluator
             return false;
         }
 
-        return unavailableAllowedCount == 1;
+        return unavailableAllowedCount >= 1;
     }
 
     private static ProofStepDto? FindProofStep(

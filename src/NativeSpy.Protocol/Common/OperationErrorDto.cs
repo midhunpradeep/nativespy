@@ -4,7 +4,7 @@ public sealed class OperationErrorDto
 {
     public OperationErrorDto(OperationErrorCode code, string? message = null)
     {
-        Code = code;
+        Code = ContractValidation.RequireDefinedEnum(code, nameof(code));
         Message = ContractValidation.OptionalText(message, nameof(message));
     }
 

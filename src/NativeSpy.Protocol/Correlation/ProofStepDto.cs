@@ -11,8 +11,8 @@ public sealed class ProofStepDto
         string? publicDetail = null)
     {
         Name = ContractValidation.RequiredIdentifier(name, nameof(name));
-        Outcome = outcome;
-        EvidenceKind = evidenceKind;
+        Outcome = ContractValidation.RequireDefinedEnum(outcome, nameof(outcome));
+        EvidenceKind = ContractValidation.RequireDefinedEnum(evidenceKind, nameof(evidenceKind));
         PublicDetail = ContractValidation.OptionalText(publicDetail, nameof(publicDetail));
     }
 

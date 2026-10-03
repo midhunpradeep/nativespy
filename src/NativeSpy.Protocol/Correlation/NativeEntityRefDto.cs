@@ -12,7 +12,7 @@ public sealed class NativeEntityRefDto
         IEnumerable<GenerationRefDto>? generationRefs = null,
         AdapterMetadataDto? adapterMetadata = null)
     {
-        BoundaryKind = boundaryKind;
+        BoundaryKind = ContractValidation.RequireDefinedEnum(boundaryKind, nameof(boundaryKind));
         if (processId is <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(processId), processId, "Process ID must be positive when supplied.");

@@ -14,15 +14,15 @@ public sealed class CorrelationDirectionCapabilityDto
         bool requiresTargetHandle,
         IEnumerable<CorrelationLimitationDto> limitations)
     {
-        Direction = direction;
-        RelationshipKinds = ContractValidation.CopyRequired(relationshipKinds, nameof(relationshipKinds));
+        Direction = ContractValidation.RequireDefinedEnum(direction, nameof(direction));
+        RelationshipKinds = ContractValidation.CopyDefinedEnums(relationshipKinds, nameof(relationshipKinds));
         if (RelationshipKinds.Distinct().Count() != RelationshipKinds.Count)
         {
             throw new ArgumentException("Relationship kinds must be unique.", nameof(relationshipKinds));
         }
 
-        Mode = mode;
-        MinimumPolicy = minimumPolicy;
+        Mode = ContractValidation.RequireDefinedEnum(mode, nameof(mode));
+        MinimumPolicy = ContractValidation.RequireDefinedEnum(minimumPolicy, nameof(minimumPolicy));
         if (candidateBound <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(candidateBound), candidateBound, "Candidate bound must be positive.");

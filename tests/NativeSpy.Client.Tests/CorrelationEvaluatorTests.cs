@@ -80,6 +80,8 @@ public sealed class CorrelationEvaluatorTests
             .WithCandidate()
             .WithProofStep("ProviderIdentity", ProofOutcome.NotAvailable)
             .AllowUnavailableForHighConfidence("ProviderIdentity")
+            .RequireValidation("CurrentGeneration")
+            .WithValidationCheck("CurrentGeneration", ValidationOutcome.Passed)
             .WithStrongEvidence()
             .WithCurrentValidation());
 
@@ -168,6 +170,52 @@ public sealed class CorrelationEvaluatorTests
         var decision = Evaluate(builder => builder
             .WithCandidate()
             .WithProofStep("IdentityProof", ProofOutcome.Passed)
+            .WithCurrentValidation());
+
+        Assert.Equal(CorrelationStatus.Unresolved, decision.Status);
+        Assert.Null(decision.PrimaryCandidateId);
+    }
+
+    [Theory]
+    [InlineData(EvidenceKind.Structural)]
+    [InlineData(EvidenceKind.Descriptive)]
+    [InlineData(EvidenceKind.Geometry)]
+    public void Exact_requires_at_least_one_deterministic_requirement(EvidenceKind evidenceKind)
+    {
+        var decision = Evaluate(builder => builder
+            .WithCandidate()
+            .WithProofStep("WeakProof", ProofOutcome.Passed, evidenceKind)
+            .RequireExactStep("WeakProof", evidenceKind)
+            .WithCurrentValidation());
+
+        Assert.Equal(CorrelationStatus.Unresolved, decision.Status);
+        Assert.Null(decision.PrimaryCandidateId);
+    }
+
+    [Fact]
+    public void Exact_allows_deterministic_and_structural_requirements_when_both_pass()
+    {
+        var decision = Evaluate(builder => builder
+            .WithCandidate()
+            .WithProofStep("DeterministicProof", ProofOutcome.Passed)
+            .WithProofStep("StructuralProof", ProofOutcome.Passed, EvidenceKind.Structural)
+            .RequireExactStep("DeterministicProof")
+            .RequireExactStep("StructuralProof", EvidenceKind.Structural)
+            .WithCurrentValidation());
+
+        Assert.Equal(CorrelationStatus.Exact, decision.Status);
+        Assert.Equal("candidate-1", decision.PrimaryCandidateId);
+    }
+
+    [Fact]
+    public void Deterministic_passed_plus_structural_not_available_is_unresolved()
+    {
+        var decision = Evaluate(builder => builder
+            .WithCandidate()
+            .WithProofStep("DeterministicProof", ProofOutcome.Passed)
+            .WithProofStep("StructuralProof", ProofOutcome.NotAvailable, EvidenceKind.Structural)
+            .RequireExactStep("DeterministicProof")
+            .RequireExactStep("StructuralProof", EvidenceKind.Structural)
             .WithCurrentValidation());
 
         Assert.Equal(CorrelationStatus.Unresolved, decision.Status);
@@ -367,12 +415,12 @@ public sealed class CorrelationEvaluatorTests
     }
 
     [Fact]
-    public void RuntimeId_like_fact_requires_the_complete_normalized_requirement()
+    public void Deterministic_identity_proof_with_complete_requirements_can_be_exact()
     {
         var decision = Evaluate(builder => builder
             .WithCandidate()
-            .WithProofStep("RuntimeIdCompare", ProofOutcome.Passed)
-            .RequireExactStep("RuntimeIdCompare")
+            .WithProofStep("DeterministicIdentityProof", ProofOutcome.Passed)
+            .RequireExactStep("DeterministicIdentityProof")
             .WithCurrentValidation());
 
         Assert.Equal(CorrelationStatus.Exact, decision.Status);
@@ -433,7 +481,7 @@ public sealed class CorrelationEvaluatorTests
     }
 
     [Fact]
-    public void More_than_one_unavailable_required_step_is_not_high_confidence()
+    public void Multiple_eligible_unavailable_deterministic_steps_still_produce_high_confidence()
     {
         var decision = Evaluate(builder => builder
             .WithCandidate()
@@ -441,6 +489,42 @@ public sealed class CorrelationEvaluatorTests
             .WithProofStep("OwnerIdentity", ProofOutcome.NotAvailable)
             .AllowUnavailableForHighConfidence("ProviderIdentity")
             .AllowUnavailableForHighConfidence("OwnerIdentity")
+            .RequireValidation("CurrentGeneration")
+            .WithValidationCheck("CurrentGeneration", ValidationOutcome.Passed)
+            .WithStrongEvidence()
+            .WithCurrentValidation());
+
+        Assert.Equal(CorrelationStatus.HighConfidence, decision.Status);
+        Assert.Equal("candidate-1", decision.PrimaryCandidateId);
+    }
+
+    [Fact]
+    public void Eligible_unavailable_deterministic_step_can_combine_with_passed_required_proof()
+    {
+        var decision = Evaluate(builder => builder
+            .WithCandidate()
+            .WithProofStep("ProviderIdentity", ProofOutcome.NotAvailable)
+            .WithProofStep("OwnerIdentity", ProofOutcome.Passed)
+            .AllowUnavailableForHighConfidence("ProviderIdentity")
+            .RequireExactStep("OwnerIdentity")
+            .WithStrongEvidence()
+            .WithCurrentValidation());
+
+        Assert.Equal(CorrelationStatus.HighConfidence, decision.Status);
+        Assert.Equal("candidate-1", decision.PrimaryCandidateId);
+    }
+
+    [Theory]
+    [InlineData(ProofOutcome.Failed)]
+    [InlineData(ProofOutcome.NotAttempted)]
+    public void Eligible_unavailable_step_with_another_non_passing_required_step_is_unresolved(ProofOutcome otherOutcome)
+    {
+        var decision = Evaluate(builder => builder
+            .WithCandidate()
+            .WithProofStep("ProviderIdentity", ProofOutcome.NotAvailable)
+            .WithProofStep("OwnerIdentity", otherOutcome)
+            .AllowUnavailableForHighConfidence("ProviderIdentity")
+            .RequireExactStep("OwnerIdentity")
             .WithStrongEvidence()
             .WithCurrentValidation());
 

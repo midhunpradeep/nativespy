@@ -17,7 +17,7 @@ public sealed class HandleRefDto
         }
 
         Generation = generation;
-        Kind = kind;
+        Kind = ContractValidation.RequireDefinedEnum(kind, nameof(kind));
         BoundaryId = ContractValidation.OptionalIdentifier(boundaryId, nameof(boundaryId));
     }
 

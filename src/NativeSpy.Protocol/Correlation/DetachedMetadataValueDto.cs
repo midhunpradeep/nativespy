@@ -14,7 +14,7 @@ public sealed class DetachedMetadataValueDto
         IReadOnlyList<DetachedMetadataValueDto>? arrayValue = null,
         IReadOnlyList<DetachedMetadataPropertyDto>? objectValue = null)
     {
-        Kind = kind;
+        Kind = ContractValidation.RequireDefinedEnum(kind, nameof(kind));
         BooleanValue = booleanValue;
         IntegerValue = integerValue;
         DecimalValue = decimalValue;

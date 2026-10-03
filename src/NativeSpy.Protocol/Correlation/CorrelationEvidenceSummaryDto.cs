@@ -10,7 +10,7 @@ public sealed class CorrelationEvidenceSummaryDto
         string? detail = null)
     {
         Name = ContractValidation.RequiredIdentifier(name, nameof(name));
-        EvidenceKind = evidenceKind;
+        EvidenceKind = ContractValidation.RequireDefinedEnum(evidenceKind, nameof(evidenceKind));
         Detail = ContractValidation.OptionalText(detail, nameof(detail));
     }
 

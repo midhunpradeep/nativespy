@@ -11,7 +11,7 @@ public sealed class CorrelationProofSummaryDto
         IEnumerable<CorrelationLimitationDto> limitations,
         bool revalidated)
     {
-        Method = method;
+        Method = ContractValidation.RequireDefinedEnum(method, nameof(method));
         Steps = ContractValidation.CopyRequired(steps, nameof(steps));
         ValidationDetails = ContractValidation.CopyRequired(validationDetails, nameof(validationDetails));
         Limitations = ContractValidation.CopyRequired(limitations, nameof(limitations));

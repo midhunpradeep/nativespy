@@ -1,3 +1,5 @@
+using NativeSpy.Protocol.Common;
+
 namespace NativeSpy.Protocol.Correlation;
 
 public sealed class CorrelationPolicyDto
@@ -8,7 +10,7 @@ public sealed class CorrelationPolicyDto
         int maxExternalNodes,
         int maxProviderNodes)
     {
-        Mode = mode;
+        Mode = ContractValidation.RequireDefinedEnum(mode, nameof(mode));
         if (maxCandidates <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(maxCandidates), maxCandidates, "Candidate bound must be positive.");

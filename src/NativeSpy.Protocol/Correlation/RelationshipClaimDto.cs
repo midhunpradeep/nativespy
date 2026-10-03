@@ -12,9 +12,9 @@ public sealed class RelationshipClaimDto
         IEnumerable<GenerationRefDto>? generationRefs = null,
         AdapterMetadataDto? adapterMetadata = null)
     {
-        Kind = kind;
+        Kind = ContractValidation.RequireDefinedEnum(kind, nameof(kind));
         TargetRef = targetRef ?? throw new ArgumentNullException(nameof(targetRef));
-        Scope = scope;
+        Scope = ContractValidation.RequireDefinedEnum(scope, nameof(scope));
         SourceTargetRef = sourceTargetRef;
         GenerationRefs = generationRefs is null
             ? Array.Empty<GenerationRefDto>()

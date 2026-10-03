@@ -12,15 +12,16 @@ public sealed class CorrelationEffectSummaryDto
         VisibleMutationEffect visibleMutation,
         IEnumerable<string> operations)
     {
-        Categories = ContractValidation.CopyRequired(categories, nameof(categories));
+        Categories = ContractValidation.CopyDefinedEnums(categories, nameof(categories));
         if (Categories.Distinct().Count() != Categories.Count)
         {
             throw new ArgumentException("Effect categories must be unique.", nameof(categories));
         }
 
-        FrameworkState = frameworkState;
-        ApplicationCallbacks = applicationCallbacks;
+        FrameworkState = ContractValidation.RequireDefinedEnum(frameworkState, nameof(frameworkState));
+        ApplicationCallbacks = ContractValidation.RequireDefinedEnum(applicationCallbacks, nameof(applicationCallbacks));
         CallbackDetails = ContractValidation.CopyRequired(callbackDetails, nameof(callbackDetails));
+        VisibleMutation = ContractValidation.RequireDefinedEnum(visibleMutation, nameof(visibleMutation));
         Operations = ContractValidation.CopyRequired(operations, nameof(operations));
         foreach (var operation in Operations)
         {

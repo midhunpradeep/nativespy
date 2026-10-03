@@ -1,3 +1,5 @@
+using NativeSpy.Protocol.Common;
+
 namespace NativeSpy.Protocol.Correlation;
 
 public sealed class CorrelationSourceDto
@@ -7,7 +9,7 @@ public sealed class CorrelationSourceDto
         ExternalObservationRefDto? externalObservation = null,
         CorrelationTargetRefDto? nativeTarget = null)
     {
-        SourceKind = sourceKind;
+        SourceKind = ContractValidation.RequireDefinedEnum(sourceKind, nameof(sourceKind));
         ExternalObservation = externalObservation;
         NativeTarget = nativeTarget;
 

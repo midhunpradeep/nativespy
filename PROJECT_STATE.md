@@ -14,6 +14,7 @@
 - detached CLR type identity/reference contracts;
 - Client-owned normalized proof and validation requirements;
 - pure shared `CorrelationEvaluator`;
+- closed-enum validation at Protocol DTO boundaries;
 - exhaustive evaluator decision-table and architectural regression tests.
 
 ## Not implemented
@@ -37,7 +38,7 @@
 - SDK: .NET 10.0.401
 - TFMs: Protocol `netstandard2.0`; Client/tests `net10.0`
 - Build: passing
-- Tests: 59 passing, 0 skipped
+- Tests: 68 passing, 0 skipped
 
 ## Known limitations
 
