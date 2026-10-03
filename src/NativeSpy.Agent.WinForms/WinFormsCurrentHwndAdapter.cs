@@ -13,13 +13,16 @@ public sealed class WinFormsCurrentHwndAdapter
 {
     private readonly Func<object, HandleRefDto> _issueHandle;
     private readonly Func<HandleRefDto, object?> _resolveHandle;
+    private readonly Func<Type, string> _typeIdProvider;
 
     public WinFormsCurrentHwndAdapter(
         Func<object, HandleRefDto> issueHandle,
-        Func<HandleRefDto, object?> resolveHandle)
+        Func<HandleRefDto, object?> resolveHandle,
+        Func<Type, string> typeIdProvider)
     {
         _issueHandle = issueHandle ?? throw new ArgumentNullException(nameof(issueHandle));
         _resolveHandle = resolveHandle ?? throw new ArgumentNullException(nameof(resolveHandle));
+        _typeIdProvider = typeIdProvider ?? throw new ArgumentNullException(nameof(typeIdProvider));
     }
 
     public FrameworkCorrelationEvidenceDto BeginCurrentHwnd(ulong hwnd)
@@ -167,7 +170,7 @@ public sealed class WinFormsCurrentHwndAdapter
             new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));
     }
 
-    private static CorrelationTargetRefDto CreateCandidateTarget(
+    private CorrelationTargetRefDto CreateCandidateTarget(
         HandleRefDto handle,
         Type type)
     {
@@ -176,12 +179,14 @@ public sealed class WinFormsCurrentHwndAdapter
             throw new InvalidOperationException("The supplied handle issuer returned a non-ClrObject handle.");
         }
 
+        var boundaryId = handle.BoundaryId
+            ?? throw new InvalidOperationException("The supplied handle issuer returned no runtime boundary ID.");
         return new CorrelationTargetRefDto(
             CorrelationTargetKind.ManagedObject,
             managed: new ManagedObjectRefDto(
                 handle,
-                CreateTypeIdentity(type),
-                handle.BoundaryId));
+                CreateTypeIdentity(type, boundaryId),
+                boundaryId));
     }
 
     private static Control? FindControl(ulong hwnd)
@@ -209,17 +214,22 @@ public sealed class WinFormsCurrentHwndAdapter
         return IsCurrentControl(control, hwnd);
     }
 
-    private static TypeIdentityDto CreateTypeIdentity(Type type)
+    private TypeIdentityDto CreateTypeIdentity(Type type, string boundaryId)
     {
         var fullName = type.FullName ?? type.Name;
         var assembly = type.Assembly.GetName();
         var assemblyName = assembly.Name ?? type.Assembly.FullName ?? type.Name;
-        var typeId = type.AssemblyQualifiedName ?? fullName;
+        var typeId = _typeIdProvider(type);
+        if (string.IsNullOrWhiteSpace(typeId))
+        {
+            throw new InvalidOperationException("The type-ID provider returned an empty session-local type ID.");
+        }
+
         return new TypeIdentityDto(
             typeId,
             fullName,
             assemblyName,
-            "winforms-process",
+            boundaryId,
             type.IsValueType,
             Array.Empty<TypeRefDto>(),
             Array.Empty<TypeRefDto>(),

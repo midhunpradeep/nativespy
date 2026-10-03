@@ -10,6 +10,7 @@ public interface IExternalUiaObservationPort
     Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken);
 
     Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
+        ExternalUiaCaptureRefDto capture,
         ulong hwnd,
         CancellationToken cancellationToken);
 }

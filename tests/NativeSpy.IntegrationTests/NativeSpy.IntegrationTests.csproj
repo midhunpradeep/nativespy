@@ -20,14 +20,18 @@
     <ProjectReference Include="..\..\src\NativeSpy.Client\NativeSpy.Client.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.FlaUI\NativeSpy.FlaUI.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
-    <ProjectReference Include="..\NativeSpy.TestTarget.WinForms\NativeSpy.TestTarget.WinForms.csproj">
+    <TestTargetProjectReference Include="..\NativeSpy.TestTarget.WinForms\NativeSpy.TestTarget.WinForms.csproj" />
+    <ProjectReference Include="@(TestTargetProjectReference)">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
   </ItemGroup>
   <Target Name="CopyTestTargetArtifacts" AfterTargets="Build">
-    <ItemGroup>
-      <TestTargetArtifacts Include="..\NativeSpy.TestTarget.WinForms\bin\$(Configuration)\net10.0-windows\*.*" />
-    </ItemGroup>
+    <MSBuild
+      Projects="@(TestTargetProjectReference)"
+      Targets="GetNativeSpyTestTargetArtifacts"
+      Properties="Configuration=$(Configuration);Platform=$(Platform)">
+      <Output TaskParameter="TargetOutputs" ItemName="TestTargetArtifacts" />
+    </MSBuild>
     <Copy
       SourceFiles="@(TestTargetArtifacts)"
       DestinationFiles="@(TestTargetArtifacts->'$(OutputPath)%(Filename)%(Extension)')"

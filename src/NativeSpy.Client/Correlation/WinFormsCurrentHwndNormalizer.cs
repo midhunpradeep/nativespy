@@ -49,6 +49,7 @@ internal sealed class WinFormsCurrentHwndNormalizer
             initialEqualityEvidence,
             revalidatedTargetEvidence,
             revalidatedEqualityEvidence);
+        var validationRequirements = CreateValidationRequirements();
         var validationChecks = CreateValidationChecks(
             externalEvidence,
             initialTargetEvidence,
@@ -60,7 +61,7 @@ internal sealed class WinFormsCurrentHwndNormalizer
             && initialEqualityEvidence is not null
             && revalidatedTargetEvidence is not null
             && revalidatedEqualityEvidence is not null
-            && validationChecks.All(static check => check.Outcome == ValidationOutcome.Passed);
+            && ValidationRequirementsPass(validationChecks, validationRequirements);
         var validation = new CorrelationValidationDto(
             validationChecks,
             Array.Empty<GenerationRefDto>(),
@@ -84,6 +85,7 @@ internal sealed class WinFormsCurrentHwndNormalizer
                 revalidatedEqualityEvidence,
                 proofSteps,
                 validationChecks,
+                validationRequirements,
                 revalidated,
                 limitations);
             candidates = new[] { candidate };
@@ -94,7 +96,7 @@ internal sealed class WinFormsCurrentHwndNormalizer
                     proofSteps,
                     validationChecks,
                     CreateExactRequirements(),
-                    CreateValidationRequirements(),
+                    validationRequirements,
                     strongEvidenceSatisfied: false)
             };
         }
@@ -131,11 +133,12 @@ internal sealed class WinFormsCurrentHwndNormalizer
         ExternalUiaEqualityEvidenceDto? revalidatedEqualityEvidence,
         IReadOnlyList<ProofStepDto> proofSteps,
         IReadOnlyList<ValidationCheckDto> validationChecks,
+        IReadOnlyList<ValidationRequirement> validationRequirements,
         bool revalidated,
         IReadOnlyList<CorrelationLimitationDto> limitations)
     {
         var exactFactsPass = ExactFactsPass(proofSteps);
-        var validationPass = ValidationRequirementsPass(validationChecks);
+        var validationPass = ValidationRequirementsPass(validationChecks, validationRequirements);
         var relationships = exactFactsPass && validationPass && revalidated
             ? new[]
             {
@@ -181,12 +184,28 @@ internal sealed class WinFormsCurrentHwndNormalizer
         ExternalUiaEqualityEvidenceDto? revalidatedEqualityEvidence)
     {
         var steps = new List<ProofStepDto>();
-        AddProofFact(steps, initialEqualityEvidence, "ElementFromHandle");
-        AddProofFact(steps, initialEqualityEvidence, "CompareElements");
+        AddNormalizedEqualityProofFact(
+            steps,
+            initialEqualityEvidence,
+            "ElementFromHandle",
+            "ElementFromHandle");
+        AddNormalizedEqualityProofFact(
+            steps,
+            initialEqualityEvidence,
+            "CompareElements",
+            "CompareElements");
         AddProofFact(steps, initialTargetEvidence, "ControlFromHandle");
         AddProofFact(steps, revalidatedTargetEvidence, "ControlFromHandleReferenceEqual");
-        AddProofFact(steps, revalidatedEqualityEvidence, "ElementFromHandleRevalidated");
-        AddProofFact(steps, revalidatedEqualityEvidence, "CompareElementsRevalidated");
+        AddNormalizedEqualityProofFact(
+            steps,
+            revalidatedEqualityEvidence,
+            "ElementFromHandle",
+            "ElementFromHandleRevalidated");
+        AddNormalizedEqualityProofFact(
+            steps,
+            revalidatedEqualityEvidence,
+            "CompareElements",
+            "CompareElementsRevalidated");
         return steps;
     }
 
@@ -211,6 +230,8 @@ internal sealed class WinFormsCurrentHwndNormalizer
             new ValidationRequirement("RevalidatedProcessIdentityCurrent"),
             new ValidationRequirement("InitialExternalHwndMatches"),
             new ValidationRequirement("RevalidatedExternalHwndMatches"),
+            new ValidationRequirement("InitialExternalSourceCurrent"),
+            new ValidationRequirement("RevalidatedExternalSourceCurrent"),
             new ValidationRequirement("InitialCurrentHwndMatches"),
             new ValidationRequirement("InitialControlLive"),
             new ValidationRequirement("RevalidatedCurrentHwndMatches"),
@@ -249,29 +270,37 @@ internal sealed class WinFormsCurrentHwndNormalizer
         var revalidatedCurrent = RevalidatedValidation(initialCurrent, revalidatedTargetEvidence, "CurrentHwndMatches");
         var revalidatedLive = RevalidatedValidation(initialLive, revalidatedTargetEvidence, "ControlLive");
         var candidateResolved = ValidationFromFact(revalidatedTargetEvidence, "CandidateResolved");
-
-        return new[]
+        var requiredChecks = new[]
         {
             new ValidationCheckDto("ProcessIdentityCurrent", processIdentity),
             new ValidationCheckDto("RevalidatedProcessIdentityCurrent", revalidatedProcess),
             new ValidationCheckDto("InitialExternalHwndMatches", initialExternalHwnd),
             new ValidationCheckDto("RevalidatedExternalHwndMatches", revalidatedExternalHwnd),
+            new ValidationCheckDto("InitialExternalSourceCurrent", initialEqualityEvidence is null
+                ? ValidationOutcome.NotAvailable
+                : EqualitySourceValidation(initialEqualityEvidence)),
+            new ValidationCheckDto("RevalidatedExternalSourceCurrent", revalidatedEqualityEvidence is null
+                ? ValidationOutcome.NotAvailable
+                : EqualitySourceValidation(revalidatedEqualityEvidence)),
             new ValidationCheckDto("InitialCurrentHwndMatches", initialCurrent),
             new ValidationCheckDto("InitialControlLive", initialLive),
             new ValidationCheckDto("RevalidatedCurrentHwndMatches", revalidatedCurrent),
             new ValidationCheckDto("RevalidatedControlLive", revalidatedLive),
-            new ValidationCheckDto("CandidateReferenceResolved", candidateResolved),
-            new ValidationCheckDto(
-                "InitialExternalSourceCurrent",
-                initialEqualityEvidence is null
-                    ? ValidationOutcome.NotAvailable
-                    : EqualitySourceValidation(initialEqualityEvidence)),
-            new ValidationCheckDto(
-                "RevalidatedExternalSourceCurrent",
-                revalidatedEqualityEvidence is null
-                    ? ValidationOutcome.NotAvailable
-                    : EqualitySourceValidation(revalidatedEqualityEvidence))
+            new ValidationCheckDto("CandidateReferenceResolved", candidateResolved)
         };
+        var reservedNames = new HashSet<string>(
+            requiredChecks.Select(static check => check.Name),
+            StringComparer.Ordinal);
+        var diagnosticFacts = new List<CorrelationValidationFactDto>();
+        diagnosticFacts.AddRange(initialTargetEvidence.ValidationFacts);
+        if (revalidatedTargetEvidence is not null)
+        {
+            diagnosticFacts.AddRange(revalidatedTargetEvidence.ValidationFacts);
+        }
+
+        return requiredChecks
+            .Concat(CreateDiagnosticValidationChecks(diagnosticFacts, reservedNames))
+            .ToArray();
     }
 
     private static ValidationOutcome RevalidatedValidation(
@@ -488,34 +517,52 @@ internal sealed class WinFormsCurrentHwndNormalizer
             && step.Outcome == ProofOutcome.Passed));
     }
 
-    private static bool ValidationRequirementsPass(IReadOnlyList<ValidationCheckDto> checks)
+    private static IReadOnlyList<ValidationCheckDto> CreateDiagnosticValidationChecks(
+        IEnumerable<CorrelationValidationFactDto> facts,
+        IReadOnlySet<string> reservedNames)
     {
-        var names = new[]
-        {
-            "ProcessIdentityCurrent",
-            "RevalidatedProcessIdentityCurrent",
-            "InitialExternalHwndMatches",
-            "RevalidatedExternalHwndMatches",
-            "InitialCurrentHwndMatches",
-            "InitialControlLive",
-            "RevalidatedCurrentHwndMatches",
-            "RevalidatedControlLive",
-            "CandidateReferenceResolved"
-        };
-        return names.All(name => checks.Any(check =>
-            string.Equals(check.Name, name, StringComparison.Ordinal)
+        return facts
+            .Where(fact => !reservedNames.Contains(fact.Name))
+            .GroupBy(fact => fact.Name, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var distinctFacts = group
+                    .Select(fact => (fact.Outcome, fact.Detail))
+                    .Distinct()
+                    .ToArray();
+                return distinctFacts.Length == 1
+                    ? new ValidationCheckDto(
+                        group.Key,
+                        distinctFacts[0].Outcome,
+                        distinctFacts[0].Detail)
+                    : new ValidationCheckDto(
+                        group.Key,
+                        ValidationOutcome.Conflicted,
+                        "Duplicate diagnostic validation facts conflicted.");
+            })
+            .ToArray();
+    }
+
+    private static bool ValidationRequirementsPass(
+        IReadOnlyList<ValidationCheckDto> checks,
+        IReadOnlyList<ValidationRequirement> requirements)
+    {
+        return requirements.All(requirement => checks.Any(check =>
+            string.Equals(check.Name, requirement.CheckName, StringComparison.Ordinal)
             && check.Outcome == ValidationOutcome.Passed));
     }
 
-    private static void AddProofFact(
+    private static void AddNormalizedEqualityProofFact(
         List<ProofStepDto> target,
         ExternalUiaEqualityEvidenceDto? evidence,
-        string name)
+        string adapterFactName,
+        string normalizedName)
     {
-        var fact = evidence is null ? null : FindFact(evidence.EvidenceFacts, name);
+        var fact = evidence is null ? null : FindFact(evidence.EvidenceFacts, adapterFactName);
         if (fact is not null)
         {
-            target.Add(new ProofStepDto(fact.Name, fact.Outcome, fact.EvidenceKind, fact.Detail));
+            target.Add(new ProofStepDto(normalizedName, fact.Outcome, fact.EvidenceKind, fact.Detail));
         }
     }
 
@@ -600,8 +647,8 @@ internal sealed class WinFormsCurrentHwndNormalizer
     }
 
     private static bool SameSource(
-        ExternalObservationRefDto expected,
-        ExternalObservationRefDto actual)
+        ExternalUiaCaptureRefDto expected,
+        ExternalUiaCaptureRefDto actual)
     {
         return string.Equals(expected.ObservationId, actual.ObservationId, StringComparison.Ordinal)
             && string.Equals(expected.CaptureId, actual.CaptureId, StringComparison.Ordinal);

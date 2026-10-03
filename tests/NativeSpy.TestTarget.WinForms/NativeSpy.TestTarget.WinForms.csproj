@@ -12,4 +12,9 @@
     <ProjectReference Include="..\..\src\NativeSpy.Agent.WinForms\NativeSpy.Agent.WinForms.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
   </ItemGroup>
+  <Target Name="GetNativeSpyTestTargetArtifacts" Returns="@(NativeSpyTestTargetArtifacts)">
+    <ItemGroup>
+      <NativeSpyTestTargetArtifacts Include="$(TargetDir)*.*" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -9,16 +9,15 @@ namespace NativeSpy.FlaUI;
 
 /// <summary>
 /// Retains one live FlaUI source internally while exposing detached Client evidence.
+/// Capture identity and Client proof phase are owned by the caller, not this adapter.
 /// </summary>
 public sealed class FlaUiExternalSource : IExternalUiaObservationPort
 {
     private readonly AutomationBase _automation;
     private readonly AutomationElement _element;
     private readonly int _attachedProcessId;
-    private readonly ExternalObservationRefDto _source;
+    private readonly string _observationId;
     private readonly object _gate = new();
-    private ExternalUiaEvidenceDto? _capture;
-    private int _equalityCallCount;
 
     internal FlaUiExternalSource(
         AutomationBase automation,
@@ -33,41 +32,47 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
         }
 
         _attachedProcessId = attachedProcessId;
-        _source = new ExternalObservationRefDto(
-            $"uia-observation-{Guid.NewGuid():N}",
-            $"uia-capture-{Guid.NewGuid():N}");
+        _observationId = $"uia-observation-{Guid.NewGuid():N}";
     }
 
     public Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var capture = new ExternalUiaCaptureRefDto(
+            _observationId,
+            $"uia-capture-{Guid.NewGuid():N}");
         lock (_gate)
         {
-            _capture ??= CaptureCore();
-            return Task.FromResult(_capture);
+            return Task.FromResult(CaptureCore(capture));
         }
     }
 
     public Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
+        ExternalUiaCaptureRefDto capture,
         ulong hwnd,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(capture);
         cancellationToken.ThrowIfCancellationRequested();
         if (hwnd == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(hwnd), hwnd, "HWND must be positive.");
         }
 
+        if (!string.Equals(capture.ObservationId, _observationId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The capture reference belongs to a different retained UI Automation observation.",
+                nameof(capture));
+        }
+
         lock (_gate)
         {
-            var capture = _capture
-                ?? throw new InvalidOperationException("CaptureAsync must complete before equality comparison.");
-            var isRevalidation = Interlocked.Increment(ref _equalityCallCount) > 1;
-            return Task.FromResult(CompareCore(capture, hwnd, isRevalidation));
+            return Task.FromResult(CompareCore(capture, hwnd));
         }
     }
 
-    private ExternalUiaEvidenceDto CaptureCore()
+    private ExternalUiaEvidenceDto CaptureCore(ExternalUiaCaptureRefDto capture)
     {
         try
         {
@@ -94,7 +99,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
             AddDescriptiveFact(facts, "ClassName", _element.Properties.ClassName.ValueOrDefault);
             AddDescriptiveFact(facts, "ControlType", _element.Properties.ControlType.ValueOrDefault.ToString());
             return new ExternalUiaEvidenceDto(
-                _source,
+                capture,
                 _attachedProcessId,
                 observedHwnd,
                 facts,
@@ -103,7 +108,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
         catch (Exception exception) when (IsExpectedUiaFailure(exception))
         {
             return new ExternalUiaEvidenceDto(
-                _source,
+                capture,
                 _attachedProcessId,
                 observedHwnd: null,
                 new[]
@@ -118,17 +123,9 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
     }
 
     private ExternalUiaEqualityEvidenceDto CompareCore(
-        ExternalUiaEvidenceDto capture,
-        ulong hwnd,
-        bool isRevalidation)
+        ExternalUiaCaptureRefDto capture,
+        ulong hwnd)
     {
-        var elementFromHandleName = isRevalidation
-            ? "ElementFromHandleRevalidated"
-            : "ElementFromHandle";
-        var compareName = isRevalidation
-            ? "CompareElementsRevalidated"
-            : "CompareElements";
-
         try
         {
             var sourceAvailable = _element.IsAvailable;
@@ -138,10 +135,10 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
             };
             if (!sourceAvailable)
             {
-                facts.Add(Fact(elementFromHandleName, ProofOutcome.NotAvailable));
-                facts.Add(Fact(compareName, ProofOutcome.NotAvailable));
+                facts.Add(Fact("ElementFromHandle", ProofOutcome.NotAvailable));
+                facts.Add(Fact("CompareElements", ProofOutcome.NotAvailable));
                 return new ExternalUiaEqualityEvidenceDto(
-                    capture.Source,
+                    capture,
                     hwnd,
                     facts,
                     new[] { new CorrelationLimitationDto("ExternalSourceNotAvailable") });
@@ -152,13 +149,13 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
                 : null;
             var elementAvailable = current is not null;
             facts.Add(Fact(
-                elementFromHandleName,
+                "ElementFromHandle",
                 elementAvailable ? ProofOutcome.Passed : ProofOutcome.Failed));
             if (!elementAvailable)
             {
-                facts.Add(Fact(compareName, ProofOutcome.NotAvailable));
+                facts.Add(Fact("CompareElements", ProofOutcome.NotAvailable));
                 return new ExternalUiaEqualityEvidenceDto(
-                    capture.Source,
+                    capture,
                     hwnd,
                     facts,
                     new[] { new CorrelationLimitationDto("ElementFromHandleUnavailable") });
@@ -166,10 +163,10 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
 
             var elementsEqual = _automation.Compare(_element, current!);
             facts.Add(Fact(
-                compareName,
+                "CompareElements",
                 elementsEqual ? ProofOutcome.Passed : ProofOutcome.Failed));
             return new ExternalUiaEqualityEvidenceDto(
-                capture.Source,
+                capture,
                 hwnd,
                 facts,
                 elementsEqual
@@ -179,13 +176,13 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
         catch (Exception exception) when (IsExpectedUiaFailure(exception))
         {
             return new ExternalUiaEqualityEvidenceDto(
-                capture.Source,
+                capture,
                 hwnd,
                 new[]
                 {
                     Fact("SourceAvailable", ProofOutcome.NotAvailable, exception.Message),
-                    Fact(elementFromHandleName, ProofOutcome.NotAvailable, exception.Message),
-                    Fact(compareName, ProofOutcome.NotAvailable, exception.Message)
+                    Fact("ElementFromHandle", ProofOutcome.NotAvailable, exception.Message),
+                    Fact("CompareElements", ProofOutcome.NotAvailable, exception.Message)
                 },
                 new[] { new CorrelationLimitationDto("ExternalEqualityUnavailable", exception.Message) },
                 new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));

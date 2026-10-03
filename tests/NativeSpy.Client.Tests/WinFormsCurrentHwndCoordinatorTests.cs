@@ -51,6 +51,76 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
             result.Candidates[0].Relationships,
             relationship => relationship.Kind == RelationshipKind.SameManagedElement);
         Assert.True(result.Validation.Revalidated);
+        Assert.Contains(
+            result.Candidates[0].ProofSummary!.Steps,
+            step => step.Name == "ElementFromHandleRevalidated");
+        Assert.Contains(
+            result.Candidates[0].ProofSummary!.Steps,
+            step => step.Name == "CompareElementsRevalidated");
+    }
+
+    [Fact]
+    public async Task Unrelated_diagnostic_validation_failure_does_not_block_exact()
+    {
+        var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: true, comparePassed: true));
+        var target = new FakeTargetPort(CreateInitialTarget(
+            1234,
+            CreateTarget(),
+            new[] { Validation("DiagnosticProbe", ValidationOutcome.Failed) }));
+        target.Revalidated = CreateRevalidatedTarget(
+            1234,
+            referenceEqual: true,
+            current: true,
+            live: true,
+            diagnosticFacts: new[] { Validation("DiagnosticProbe", ValidationOutcome.Passed) });
+
+        var result = await Resolve(external, target);
+
+        Assert.Equal(CorrelationStatus.Exact, result.Status);
+        Assert.True(result.Validation.Revalidated);
+        Assert.Contains(
+            result.Validation.Checks,
+            check => check.Name == "DiagnosticProbe" && check.Outcome == ValidationOutcome.Conflicted);
+    }
+
+    [Fact]
+    public async Task Required_initial_external_source_currentness_failure_blocks_exact()
+    {
+        var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
+        external.EqualityEvidence.Enqueue(CreateEquality(
+            123,
+            revalidated: false,
+            comparePassed: true,
+            sourceAvailable: ProofOutcome.Failed));
+        var target = new FakeTargetPort(CreateInitialTarget(1234));
+
+        var result = await Resolve(external, target);
+
+        Assert.Equal(CorrelationStatus.Unresolved, result.Status);
+        Assert.Single(result.Candidates);
+        Assert.False(result.Validation.Revalidated);
+    }
+
+    [Fact]
+    public async Task Required_revalidated_external_source_currentness_failure_blocks_exact()
+    {
+        var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(
+            123,
+            revalidated: true,
+            comparePassed: true,
+            sourceAvailable: ProofOutcome.Failed));
+        var target = new FakeTargetPort(CreateInitialTarget(1234));
+        target.Revalidated = CreateRevalidatedTarget(1234, referenceEqual: true, current: true, live: true);
+
+        var result = await Resolve(external, target);
+
+        Assert.Equal(CorrelationStatus.Unresolved, result.Status);
+        Assert.Single(result.Candidates);
+        Assert.False(result.Validation.Revalidated);
     }
 
     [Fact]
@@ -153,7 +223,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
         external.EqualityEvidence.Enqueue(new ExternalUiaEqualityEvidenceDto(
-            new ExternalObservationRefDto("observation", "capture"),
+            new ExternalUiaCaptureRefDto("observation", "capture"),
             123,
             new[]
             {
@@ -187,7 +257,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     private static ExternalUiaEvidenceDto CreateExternalEvidence(int processId, ulong? observedHwnd)
     {
         return new ExternalUiaEvidenceDto(
-            new ExternalObservationRefDto("observation", "capture"),
+            new ExternalUiaCaptureRefDto("observation", "capture"),
             processId,
             observedHwnd,
             new[]
@@ -202,20 +272,17 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     private static ExternalUiaEqualityEvidenceDto CreateEquality(
         ulong hwnd,
         bool revalidated,
-        bool comparePassed)
+        bool comparePassed,
+        ProofOutcome sourceAvailable = ProofOutcome.Passed)
     {
         return new ExternalUiaEqualityEvidenceDto(
-            new ExternalObservationRefDto("observation", "capture"),
+            new ExternalUiaCaptureRefDto("observation", "capture"),
             hwnd,
             new[]
             {
-                Fact("SourceAvailable", ProofOutcome.Passed),
-                Fact(
-                    revalidated ? "ElementFromHandleRevalidated" : "ElementFromHandle",
-                    ProofOutcome.Passed),
-                Fact(
-                    revalidated ? "CompareElementsRevalidated" : "CompareElements",
-                    comparePassed ? ProofOutcome.Passed : ProofOutcome.Failed)
+                Fact("SourceAvailable", sourceAvailable),
+                Fact("ElementFromHandle", ProofOutcome.Passed),
+                Fact("CompareElements", comparePassed ? ProofOutcome.Passed : ProofOutcome.Failed)
             },
             Array.Empty<CorrelationLimitationDto>());
     }
@@ -227,8 +294,14 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
 
     private static FrameworkCorrelationEvidenceDto CreateInitialTarget(
         int processId,
-        CorrelationTargetRefDto? candidate)
+        CorrelationTargetRefDto? candidate,
+        IEnumerable<CorrelationValidationFactDto>? diagnosticFacts = null)
     {
+        var validationFacts = new[]
+        {
+            Validation("CurrentHwndMatches", candidate is null ? ValidationOutcome.Failed : ValidationOutcome.Passed),
+            Validation("ControlLive", candidate is null ? ValidationOutcome.Failed : ValidationOutcome.Passed)
+        };
         return new FrameworkCorrelationEvidenceDto(
             "winforms",
             processId,
@@ -237,11 +310,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
             {
                 Fact("ControlFromHandle", candidate is null ? ProofOutcome.Failed : ProofOutcome.Passed)
             },
-            new[]
-            {
-                Validation("CurrentHwndMatches", candidate is null ? ValidationOutcome.Failed : ValidationOutcome.Passed),
-                Validation("ControlLive", candidate is null ? ValidationOutcome.Failed : ValidationOutcome.Passed)
-            },
+            validationFacts.Concat(diagnosticFacts ?? Array.Empty<CorrelationValidationFactDto>()),
             PassiveEffects(),
             Array.Empty<AdapterMetadataDto>(),
             Array.Empty<CorrelationLimitationDto>());
@@ -251,8 +320,15 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
         int processId,
         bool referenceEqual,
         bool current,
-        bool live)
+        bool live,
+        IEnumerable<CorrelationValidationFactDto>? diagnosticFacts = null)
     {
+        var validationFacts = new[]
+        {
+            Validation("CandidateResolved", ValidationOutcome.Passed),
+            Validation("CurrentHwndMatches", current ? ValidationOutcome.Passed : ValidationOutcome.Changed),
+            Validation("ControlLive", live ? ValidationOutcome.Passed : ValidationOutcome.Changed)
+        };
         return new FrameworkCorrelationEvidenceDto(
             "winforms",
             processId,
@@ -265,12 +341,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
                     referenceEqual ? ProofOutcome.Passed : ProofOutcome.Failed),
                 Fact("ControlFromHandle", current ? ProofOutcome.Passed : ProofOutcome.Failed)
             },
-            new[]
-            {
-                Validation("CandidateResolved", ValidationOutcome.Passed),
-                Validation("CurrentHwndMatches", current ? ValidationOutcome.Passed : ValidationOutcome.Changed),
-                Validation("ControlLive", live ? ValidationOutcome.Passed : ValidationOutcome.Changed)
-            },
+            validationFacts.Concat(diagnosticFacts ?? Array.Empty<CorrelationValidationFactDto>()),
             PassiveEffects(),
             Array.Empty<AdapterMetadataDto>(),
             Array.Empty<CorrelationLimitationDto>());
@@ -337,6 +408,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
         }
 
         public Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
+            ExternalUiaCaptureRefDto capture,
             ulong hwnd,
             CancellationToken cancellationToken)
         {

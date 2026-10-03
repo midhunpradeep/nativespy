@@ -9,7 +9,7 @@ public sealed class CorrelationEvidenceContractTests
     [Fact]
     public void External_evidence_requires_positive_process_identity()
     {
-        var source = new ExternalObservationRefDto("observation", "capture");
+        var source = new ExternalUiaCaptureRefDto("observation", "capture");
 
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new ExternalUiaEvidenceDto(
@@ -33,7 +33,7 @@ public sealed class CorrelationEvidenceContractTests
         };
         var effects = CreateEffects();
         var evidence = new ExternalUiaEvidenceDto(
-            new ExternalObservationRefDto("observation", "capture"),
+            new ExternalUiaCaptureRefDto("observation", "capture"),
             42,
             123,
             facts,
@@ -64,10 +64,33 @@ public sealed class CorrelationEvidenceContractTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new ExternalUiaEqualityEvidenceDto(
-                new ExternalObservationRefDto("observation", "capture"),
+                new ExternalUiaCaptureRefDto("observation", "capture"),
                 0,
                 Array.Empty<CorrelationEvidenceFactDto>(),
                 Array.Empty<CorrelationLimitationDto>()));
+    }
+
+    [Fact]
+    public void External_uia_capture_reference_keeps_observation_and_capture_identity_distinct()
+    {
+        var first = new ExternalUiaCaptureRefDto("observation", "capture-a");
+        var second = new ExternalUiaCaptureRefDto("observation", "capture-b");
+
+        Assert.Equal(first.ObservationId, second.ObservationId);
+        Assert.NotEqual(first.CaptureId, second.CaptureId);
+    }
+
+    [Fact]
+    public void Legacy_external_observation_reference_remains_the_I0_source_contract()
+    {
+        var observation = new ExternalObservationRefDto("observation", "capture");
+        var source = new CorrelationSourceDto(
+            CorrelationSourceKind.ExternalObservation,
+            externalObservation: observation);
+
+        Assert.Same(observation, source.ExternalObservation);
+        Assert.Equal("observation", source.ExternalObservation!.ObservationId);
+        Assert.Equal("capture", source.ExternalObservation.CaptureId);
     }
 
     [Fact]

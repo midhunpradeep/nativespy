@@ -41,7 +41,7 @@ public sealed class CorrelationCoordinator
         var externalEvidence = await externalPort.CaptureAsync(cancellationToken).ConfigureAwait(false);
         var source = new CorrelationSourceDto(
             CorrelationSourceKind.ExternalObservation,
-            externalObservation: externalEvidence.Source);
+            externalObservation: ToLegacyObservationReference(externalEvidence.Source));
 
         if (externalEvidence.OperationError is not null)
         {
@@ -116,7 +116,7 @@ public sealed class CorrelationCoordinator
 
         cancellationToken.ThrowIfCancellationRequested();
         var initialEqualityEvidence = await externalPort
-            .CompareWithHwndAsync(hwnd, cancellationToken)
+            .CompareWithHwndAsync(externalEvidence.Source, hwnd, cancellationToken)
             .ConfigureAwait(false);
 
         if (initialEqualityEvidence.OperationError is not null
@@ -187,13 +187,13 @@ public sealed class CorrelationCoordinator
 
         cancellationToken.ThrowIfCancellationRequested();
         var revalidatedEqualityEvidence = await externalPort
-            .CompareWithHwndAsync(hwnd, cancellationToken)
+            .CompareWithHwndAsync(externalEvidence.Source, hwnd, cancellationToken)
             .ConfigureAwait(false);
 
         var revalidatedEqualityPassed = revalidatedEqualityEvidence.OperationError is null
             && EvidencePassed(revalidatedEqualityEvidence, "SourceAvailable")
-            && EvidencePassed(revalidatedEqualityEvidence, "ElementFromHandleRevalidated")
-            && EvidencePassed(revalidatedEqualityEvidence, "CompareElementsRevalidated")
+            && EvidencePassed(revalidatedEqualityEvidence, "ElementFromHandle")
+            && EvidencePassed(revalidatedEqualityEvidence, "CompareElements")
             && MatchesExternalObservation(externalEvidence, revalidatedEqualityEvidence, hwnd);
         return CreateResultFromEvidence(
             source,
@@ -303,6 +303,12 @@ public sealed class CorrelationCoordinator
         return target?.TargetKind == CorrelationTargetKind.ManagedObject
             ? target.Managed?.Handle
             : null;
+    }
+
+    private static ExternalObservationRefDto ToLegacyObservationReference(
+        ExternalUiaCaptureRefDto capture)
+    {
+        return new ExternalObservationRefDto(capture.ObservationId, capture.CaptureId);
     }
 
     private static bool MatchesExternalObservation(

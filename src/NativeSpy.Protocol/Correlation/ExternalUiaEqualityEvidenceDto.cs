@@ -8,7 +8,7 @@ namespace NativeSpy.Protocol.Correlation;
 public sealed class ExternalUiaEqualityEvidenceDto
 {
     public ExternalUiaEqualityEvidenceDto(
-        ExternalObservationRefDto source,
+        ExternalUiaCaptureRefDto source,
         ulong hwnd,
         IEnumerable<CorrelationEvidenceFactDto> evidenceFacts,
         IEnumerable<CorrelationLimitationDto> limitations,
@@ -26,7 +26,7 @@ public sealed class ExternalUiaEqualityEvidenceDto
         OperationError = operationError;
     }
 
-    public ExternalObservationRefDto Source { get; }
+    public ExternalUiaCaptureRefDto Source { get; }
 
     public ulong Hwnd { get; }
 

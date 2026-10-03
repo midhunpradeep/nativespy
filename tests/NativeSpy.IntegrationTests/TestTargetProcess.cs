@@ -21,14 +21,21 @@ internal sealed class TestTargetProcess : IDisposable
     private int _nextRequestId;
     private bool _disposed;
 
-    private TestTargetProcess(Process process, int processId, Task<string> stderrDrain)
+    private TestTargetProcess(
+        Process process,
+        int processId,
+        ulong mainWindowHwnd,
+        Task<string> stderrDrain)
     {
         _process = process;
         ProcessId = processId;
+        MainWindowHwnd = mainWindowHwnd;
         _stderrDrain = stderrDrain;
     }
 
     public int ProcessId { get; }
+
+    public ulong MainWindowHwnd { get; }
 
     public static TestTargetProcess Start()
     {
@@ -72,7 +79,7 @@ internal sealed class TestTargetProcess : IDisposable
                 throw new InvalidOperationException("The test target returned an invalid ready message.");
             }
 
-            return new TestTargetProcess(process, ready.ProcessId, stderrDrain);
+            return new TestTargetProcess(process, ready.ProcessId, ready.Hwnd, stderrDrain);
         }
         catch
         {
@@ -216,38 +223,13 @@ internal sealed class TestTargetProcess : IDisposable
 
     private static FrameworkCorrelationEvidenceDto ToEvidence(TargetEvidenceWire wire)
     {
-        CorrelationTargetRefDto? candidateTarget = null;
-        if (wire.CandidateHandle is not null)
-        {
-            var handle = FromWire(wire.CandidateHandle);
-            TypeIdentityDto? typeIdentity = null;
-            if (!string.IsNullOrWhiteSpace(wire.TypeFullName)
-                && !string.IsNullOrWhiteSpace(wire.TypeId)
-                && !string.IsNullOrWhiteSpace(wire.AssemblySimpleName)
-                && !string.IsNullOrWhiteSpace(wire.BoundaryId))
-            {
-                typeIdentity = new TypeIdentityDto(
-                    wire.TypeId,
-                    wire.TypeFullName,
-                    wire.AssemblySimpleName,
-                    wire.BoundaryId,
-                    isValueType: false,
-                    Array.Empty<TypeRefDto>(),
-                    Array.Empty<TypeRefDto>());
-            }
-
-            candidateTarget = new CorrelationTargetRefDto(
-                CorrelationTargetKind.ManagedObject,
-                managed: new ManagedObjectRefDto(handle, typeIdentity, handle.BoundaryId));
-        }
-
         var error = wire.Error is null
             ? null
             : new OperationErrorDto((OperationErrorCode)wire.Error.Code, wire.Error.Message);
         return new FrameworkCorrelationEvidenceDto(
             wire.AdapterId,
             wire.ProcessId,
-            candidateTarget,
+            FromWire(wire.CandidateTarget),
             wire.EvidenceFacts.Select(fact => new CorrelationEvidenceFactDto(
                 fact.Name,
                 (ProofOutcome)fact.Outcome,
@@ -257,10 +239,121 @@ internal sealed class TestTargetProcess : IDisposable
                 fact.Name,
                 (ValidationOutcome)fact.Outcome,
                 fact.Detail)),
-            PassiveEffects("WinForms.Control.FromHandle"),
-            Array.Empty<AdapterMetadataDto>(),
-            Array.Empty<CorrelationLimitationDto>(),
+            FromWire(wire.Effects),
+            wire.AdapterMetadata.Select(FromWire),
+            wire.Limitations.Select(FromWire),
             error);
+    }
+
+    private static CorrelationTargetRefDto? FromWire(TargetWire? wire)
+    {
+        if (wire is null)
+        {
+            return null;
+        }
+
+        if (wire.Managed is null)
+        {
+            throw new InvalidOperationException("The I1 target wire omitted its managed target payload.");
+        }
+
+        return new CorrelationTargetRefDto(
+            (CorrelationTargetKind)wire.TargetKind,
+            managed: FromWire(wire.Managed));
+    }
+
+    private static ManagedObjectRefDto FromWire(ManagedObjectWire wire)
+    {
+        return new ManagedObjectRefDto(
+            FromWire(wire.Handle),
+            wire.TypeIdentity is null ? null : FromWire(wire.TypeIdentity),
+            wire.BoundaryId,
+            wire.ContextId);
+    }
+
+    private static TypeIdentityDto FromWire(TypeIdentityWire wire)
+    {
+        return new TypeIdentityDto(
+            wire.TypeId,
+            wire.FullName,
+            wire.AssemblySimpleName,
+            wire.BoundaryId,
+            wire.IsValueType,
+            wire.GenericArguments.Select(FromWire),
+            wire.Interfaces.Select(FromWire),
+            wire.AssemblyVersion,
+            wire.AssemblyCulture,
+            wire.PublicKeyToken,
+            wire.ModuleVersionId,
+            wire.DeclaringType is null ? null : FromWire(wire.DeclaringType),
+            wire.GenericDefinition is null ? null : FromWire(wire.GenericDefinition),
+            wire.ArrayRank,
+            wire.ArrayShape,
+            wire.PointerElementType is null ? null : FromWire(wire.PointerElementType),
+            wire.ByRefElementType is null ? null : FromWire(wire.ByRefElementType),
+            wire.NullableUnderlyingType is null ? null : FromWire(wire.NullableUnderlyingType),
+            wire.BaseType is null ? null : FromWire(wire.BaseType),
+            wire.DynamicIdentity);
+    }
+
+    private static TypeRefDto FromWire(TypeRefWire wire)
+    {
+        return new TypeRefDto(wire.TypeId, wire.BoundaryId);
+    }
+
+    private static CorrelationEffectSummaryDto FromWire(EffectWire wire)
+    {
+        return new CorrelationEffectSummaryDto(
+            wire.Categories.Select(category => (EffectCategory)category),
+            (FrameworkStateEffect)wire.FrameworkState,
+            (ApplicationCallbackEffect)wire.ApplicationCallbacks,
+            wire.CallbackDetails.Select(detail => new CallbackDetailDto(
+                detail.Name,
+                detail.Count,
+                detail.CountKnown)),
+            (VisibleMutationEffect)wire.VisibleMutation,
+            wire.Operations);
+    }
+
+    private static AdapterMetadataDto FromWire(MetadataWire wire)
+    {
+        return new AdapterMetadataDto(
+            wire.AdapterId,
+            wire.SchemaId,
+            wire.SchemaVersion,
+            FromWire(wire.Payload));
+    }
+
+    private static DetachedMetadataValueDto FromWire(MetadataValueWire wire)
+    {
+        return (DetachedMetadataValueKind)wire.Kind switch
+        {
+            DetachedMetadataValueKind.Null => DetachedMetadataValueDto.Null(),
+            DetachedMetadataValueKind.Boolean => DetachedMetadataValueDto.Boolean(
+                wire.BooleanValue ?? throw new InvalidOperationException("Boolean metadata payload was missing.")),
+            DetachedMetadataValueKind.Integer => DetachedMetadataValueDto.Integer(
+                wire.IntegerValue ?? throw new InvalidOperationException("Integer metadata payload was missing.")),
+            DetachedMetadataValueKind.Decimal => DetachedMetadataValueDto.Decimal(
+                wire.DecimalValue ?? throw new InvalidOperationException("Decimal metadata payload was missing.")),
+            DetachedMetadataValueKind.FloatingPoint => DetachedMetadataValueDto.FloatingPoint(
+                wire.FloatingPointValue ?? throw new InvalidOperationException("Floating-point metadata payload was missing.")),
+            DetachedMetadataValueKind.String => DetachedMetadataValueDto.String(
+                wire.StringValue ?? throw new InvalidOperationException("String metadata payload was missing.")),
+            DetachedMetadataValueKind.Array => DetachedMetadataValueDto.Array(
+                wire.ArrayValue?.Select(FromWire)
+                    ?? throw new InvalidOperationException("Array metadata payload was missing.")),
+            DetachedMetadataValueKind.Object => DetachedMetadataValueDto.Object(
+                wire.ObjectValue?.Select(property => new DetachedMetadataPropertyDto(
+                    property.Name,
+                    FromWire(property.Value)))
+                    ?? throw new InvalidOperationException("Object metadata payload was missing.")),
+            _ => throw new InvalidOperationException($"Unknown metadata kind '{wire.Kind}'.")
+        };
+    }
+
+    private static CorrelationLimitationDto FromWire(LimitationWire wire)
+    {
+        return new CorrelationLimitationDto(wire.Code, wire.Detail);
     }
 
     private static CorrelationEffectSummaryDto PassiveEffects(params string[] operations)
@@ -381,20 +474,80 @@ internal sealed class TestTargetProcess : IDisposable
         bool Ok,
         string? Error,
         TargetEvidenceWire? Evidence,
-        string? Text,
-        object? Reserved);
+        string? Text);
 
     private sealed record TargetEvidenceWire(
         string AdapterId,
         int ProcessId,
-        HandleWire? CandidateHandle,
-        string? TypeId,
-        string? TypeFullName,
-        string? AssemblySimpleName,
-        string? BoundaryId,
+        TargetWire? CandidateTarget,
         FactWire[] EvidenceFacts,
         ValidationWire[] ValidationFacts,
+        EffectWire Effects,
+        MetadataWire[] AdapterMetadata,
+        LimitationWire[] Limitations,
         ErrorWire? Error);
+
+    private sealed record TargetWire(int TargetKind, ManagedObjectWire? Managed);
+
+    private sealed record ManagedObjectWire(
+        HandleWire Handle,
+        TypeIdentityWire? TypeIdentity,
+        string? BoundaryId,
+        string? ContextId);
+
+    private sealed record TypeIdentityWire(
+        string TypeId,
+        string FullName,
+        string AssemblySimpleName,
+        string? AssemblyVersion,
+        string? AssemblyCulture,
+        string? PublicKeyToken,
+        string? ModuleVersionId,
+        string BoundaryId,
+        TypeRefWire? DeclaringType,
+        TypeRefWire? GenericDefinition,
+        TypeRefWire[] GenericArguments,
+        int? ArrayRank,
+        int[]? ArrayShape,
+        TypeRefWire? PointerElementType,
+        TypeRefWire? ByRefElementType,
+        TypeRefWire? NullableUnderlyingType,
+        bool IsValueType,
+        TypeRefWire? BaseType,
+        TypeRefWire[] Interfaces,
+        string? DynamicIdentity);
+
+    private sealed record TypeRefWire(string TypeId, string BoundaryId);
+
+    private sealed record EffectWire(
+        int[] Categories,
+        int FrameworkState,
+        int ApplicationCallbacks,
+        CallbackWire[] CallbackDetails,
+        int VisibleMutation,
+        string[] Operations);
+
+    private sealed record CallbackWire(string Name, int? Count, bool CountKnown);
+
+    private sealed record MetadataWire(
+        string AdapterId,
+        string SchemaId,
+        int SchemaVersion,
+        MetadataValueWire Payload);
+
+    private sealed record MetadataValueWire(
+        int Kind,
+        bool? BooleanValue,
+        long? IntegerValue,
+        decimal? DecimalValue,
+        double? FloatingPointValue,
+        string? StringValue,
+        MetadataValueWire[]? ArrayValue,
+        MetadataPropertyWire[]? ObjectValue);
+
+    private sealed record MetadataPropertyWire(string Name, MetadataValueWire Value);
+
+    private sealed record LimitationWire(string Code, string? Detail);
 
     private sealed record FactWire(string Name, int Outcome, int EvidenceKind, string? Detail);
 
