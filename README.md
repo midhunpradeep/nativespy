@@ -26,21 +26,23 @@ NativeSpy keeps correlation separate from identity. Managed objects use opaque, 
 
 ## Current state
 
-This repository contains **Iteration 3 — authenticated Named Pipes Host/Client transport over the preserved I1/I2 WinForms/FlaUI correlation slice**:
+This repository contains **Iteration 4a — compact ObjectSpy Lite over the authenticated I0–I3 WinForms/FlaUI correlation slice**:
 
 - `NativeSpy.Protocol` (`netstandard2.0`) — detached evidence, validation, policy, handle, type identity, operation-error, and shared operation-name contracts;
 - `NativeSpy.Protocol.Json` (`netstandard2.0`) — strict bounded camelCase JSON wire codec with fixed depth 64, versioned envelopes, generic payloads, handshake, capabilities, limits, and separate protocol/operation errors;
 - `NativeSpy.Agent` (`net10.0`) — framework-neutral `ClrAgentSession`, weak object identity registry, operation-local acquisitions, runtime-boundary identity, and production session-local TypeIds;
 - `NativeSpy.Client` (`net10.0`) — asynchronous evidence ports, current-HWND normalization, orchestration, and the unchanged pure certainty evaluator;
-- `NativeSpy.FlaUI` (`net10.0-windows`) — UIA3 attachment, AutomationId lookup, fresh attempt-scoped capture references, HWND observation, and stable FlaUI equality facts;
+- `NativeSpy.FlaUI` (`net10.0-windows`) — UIA3 attachment, dedicated serialized MTA ownership, point preview/freeze observations, fresh capture references, HWND observation, timeout quarantine, and stable FlaUI equality facts;
 - `NativeSpy.Agent.WinForms` (`net10.0-windows`) — synchronous target-side `Control.FromHandle`/`ReferenceEquals` evidence composed with the production Agent identity service;
 - `NativeSpy.Transport.NamedPipes` (`net10.0-windows`) — eager same-account ACL binding, pooled bounded framing, serialized writes, and process-instance identity helpers;
 - `NativeSpy.Agent.Host` (`net10.0-windows`) — single-client authenticated Host lifecycle, fixed operation registry, monotonic request budgets, bounded concurrency, response commitment, and handler dispatch;
 - `NativeSpy.Agent.Host.WinForms` (`net10.0-windows`) — the only Host-to-WinForms composition layer and asynchronous UI-thread dispatcher;
-- `NativeSpy.Client.NamedPipes` (`net10.0-windows`) — one authenticated session per target with negotiated limits, request sequencing, pending response correlation, and terminal lifecycle mapping;
-- `NativeSpy.TestTarget.WinForms` and `NativeSpy.IntegrationTests` — deterministic x64 target, bootstrap-only stdout, Named Pipes integration, and live end-to-end proof.
+- `NativeSpy.Client.NamedPipes` (`net10.0-windows`) — one authenticated session per target with negotiated limits, request sequencing, pending response correlation, terminal lifecycle mapping, and transport-neutral CLR inspection ports;
+- `NativeSpy.ObjectSpy` (`net10.0-windows`) — Exact-gated preview/freeze coordinator, detached UIA state, bounded CLR member paging/field reads, lazy property reads, and explicit object-reference navigation;
+- `NativeSpy.ObjectSpy.App` (`net10.0-windows`) — runnable WPF ObjectSpy Lite client with physical-coordinate click-through overlay and controlled synthetic WinForms target bootstrap;
+- `NativeSpy.TestTarget.WinForms` and `NativeSpy.IntegrationTests` — deterministic x64 target, bootstrap-only stdout, Named Pipes integration, I0–I3 regressions, and live ObjectSpy end-to-end proof.
 
-The supported path remains UIA3 `UiaToNative` correlation under explicit `Conservative` policy. Each resolution receives a fresh capture ID while retaining the source observation ID; Client normalization, not FlaUI or Agent, assigns proof phases and certainty. It returns `Exact + SameManagedElement` only after initial and revalidated UIA equality, current-HWND WinForms lookup, and CLR reference equality.
+The supported path remains UIA3 `UiaToNative` correlation under explicit `Conservative` policy. Each resolution receives a fresh capture ID while retaining the source observation ID; Client normalization, not FlaUI or Agent, assigns proof phases and certainty. It returns `Exact + SameManagedElement` only after initial and revalidated UIA equality, current-HWND WinForms lookup, and CLR reference equality. Only `CorrelationStatus.Exact` exposes CLR identity to ObjectSpy; all other statuses retain evidence and lock CLR inspection.
 
 ## I2 identity model
 
@@ -68,6 +70,7 @@ The selected SDK is recorded in `global.json`.
 
 ## Roadmap
 
-- **I4** — minimal generic CLR inspection and ObjectSpy Lite.
+- **I4a** — compact generic CLR inspection and ObjectSpy Lite (implemented).
+- **I5+** — attach/bootstrap, broader browser behavior, and additional target/provider support (deferred).
 
-See [`PROJECT_STATE.md`](PROJECT_STATE.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/ITERATION-0-IMPLEMENTATION-NOTES.md`](docs/ITERATION-0-IMPLEMENTATION-NOTES.md), [`docs/ITERATION-1-IMPLEMENTATION-NOTES.md`](docs/ITERATION-1-IMPLEMENTATION-NOTES.md), and [`docs/ITERATION-2-IMPLEMENTATION-NOTES.md`](docs/ITERATION-2-IMPLEMENTATION-NOTES.md).
+See [`PROJECT_STATE.md`](PROJECT_STATE.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/ITERATION-0-IMPLEMENTATION-NOTES.md`](docs/ITERATION-0-IMPLEMENTATION-NOTES.md), [`docs/ITERATION-1-IMPLEMENTATION-NOTES.md`](docs/ITERATION-1-IMPLEMENTATION-NOTES.md), [`docs/ITERATION-2-IMPLEMENTATION-NOTES.md`](docs/ITERATION-2-IMPLEMENTATION-NOTES.md), and [`docs/ITERATION-4A-IMPLEMENTATION-NOTES.md`](docs/ITERATION-4A-IMPLEMENTATION-NOTES.md).

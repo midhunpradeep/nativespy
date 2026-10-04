@@ -65,6 +65,14 @@ public sealed class ClrAgentSession : IManagedObjectReferenceService, IDisposabl
                 return ManagedObjectRegistrationResult.Success(existing!.Reference);
             }
 
+            if (_objectRegistry.Count >= ClrInspectionLimits.MaxObjectRecordsPerSession)
+            {
+                return ManagedObjectRegistrationResult.Failure(
+                    new OperationErrorDto(
+                        OperationErrorCode.RegistryQuotaExceeded,
+                        "The Agent session exhausted its object identity quota."));
+            }
+
             var boundary = _boundaryRegistry.GetOrCreate(
                 observation.LoadContext,
                 () => $"boundary-{Guid.NewGuid():N}",
@@ -159,6 +167,35 @@ public sealed class ClrAgentSession : IManagedObjectReferenceService, IDisposabl
         Close();
     }
 
+    internal bool TryGetOrCreateTypeIdentity(
+        Type type,
+        out TypeIdentityDto? identity)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        var observation = ObserveType(type);
+        if (observation is null)
+        {
+            identity = null;
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (_state != AgentSessionState.Active)
+            {
+                identity = null;
+                return false;
+            }
+
+            var boundary = _boundaryRegistry.GetOrCreate(
+                observation.LoadContext,
+                () => $"boundary-{Guid.NewGuid():N}",
+                DescribeBoundary(observation.LoadContext));
+            identity = GetOrCreateTypeIdentity(observation, boundary.BoundaryId);
+            return true;
+        }
+    }
+
     private TypeIdentityDto GetOrCreateTypeIdentity(
         TypeObservation observation,
         string boundaryId)
@@ -189,6 +226,11 @@ public sealed class ClrAgentSession : IManagedObjectReferenceService, IDisposabl
             moduleVersionId: observation.ModuleVersionId);
         _typeRegistry.Add(observation.Type, typeIdentity);
         return typeIdentity;
+    }
+
+    internal bool IsInspectionActive()
+    {
+        return IsActive();
     }
 
     private bool IsActive()

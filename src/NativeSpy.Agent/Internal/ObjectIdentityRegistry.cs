@@ -9,6 +9,8 @@ internal sealed class ObjectIdentityRegistry
     private ConditionalWeakTable<object, ObjectIdentityEntry> _entries = new();
     private Dictionary<string, HandleRecord> _records = new(StringComparer.Ordinal);
 
+    public int Count => _records.Count;
+
     public bool TryGet(object target, out ObjectIdentityEntry? entry)
     {
         ArgumentNullException.ThrowIfNull(target);

@@ -817,7 +817,7 @@ public static class ProtocolJsonCodec
         };
     }
 
-    private static ManagedObjectWire ToWire(ManagedObjectRefDto managed)
+    internal static ManagedObjectWire ToWire(ManagedObjectRefDto managed)
     {
         return new ManagedObjectWire
         {
@@ -858,7 +858,7 @@ public static class ProtocolJsonCodec
         };
     }
 
-    private static HandleWire ToWire(HandleRefDto handle)
+    internal static HandleWire ToWire(HandleRefDto handle)
     {
         return new HandleWire
         {
@@ -870,7 +870,7 @@ public static class ProtocolJsonCodec
         };
     }
 
-    private static TypeIdentityWire ToWire(TypeIdentityDto type)
+    internal static TypeIdentityWire ToWire(TypeIdentityDto type)
     {
         return new TypeIdentityWire
         {
@@ -897,7 +897,7 @@ public static class ProtocolJsonCodec
         };
     }
 
-    private static TypeRefWire ToWire(TypeRefDto type)
+    internal static TypeRefWire ToWire(TypeRefDto type)
     {
         return new TypeRefWire { TypeId = type.TypeId, BoundaryId = type.BoundaryId };
     }
@@ -993,7 +993,7 @@ public static class ProtocolJsonCodec
         };
     }
 
-    private static ManagedObjectRefDto FromWire(ManagedObjectWire wire)
+    internal static ManagedObjectRefDto FromWire(ManagedObjectWire wire)
     {
         return new ManagedObjectRefDto(
             FromWire(wire.Handle),
@@ -1026,7 +1026,7 @@ public static class ProtocolJsonCodec
             wire.AdapterMetadata is null ? null : FromWire(wire.AdapterMetadata));
     }
 
-    private static HandleRefDto FromWire(HandleWire wire)
+    internal static HandleRefDto FromWire(HandleWire wire)
     {
         return new HandleRefDto(
             wire.SessionId,
@@ -1036,7 +1036,7 @@ public static class ProtocolJsonCodec
             wire.BoundaryId);
     }
 
-    private static TypeIdentityDto FromWire(TypeIdentityWire wire)
+    internal static TypeIdentityDto FromWire(TypeIdentityWire wire)
     {
         return new TypeIdentityDto(
             wire.TypeId,
@@ -1061,7 +1061,7 @@ public static class ProtocolJsonCodec
             wire.DynamicIdentity);
     }
 
-    private static TypeRefDto FromWire(TypeRefWire wire) => new(wire.TypeId, wire.BoundaryId);
+    internal static TypeRefDto FromWire(TypeRefWire wire) => new(wire.TypeId, wire.BoundaryId);
 
     private static GenerationRefDto FromWire(GenerationWire wire) =>
         new(wire.AdapterId, wire.Kind, wire.Value, wire.ScopeId);

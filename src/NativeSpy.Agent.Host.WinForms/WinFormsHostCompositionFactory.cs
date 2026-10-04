@@ -33,27 +33,39 @@ public sealed class WinFormsHostCompositionFactory : IAgentHostCompositionFactor
             throw new ArgumentNullException(nameof(context));
         }
 
+        if (identityService is not ClrAgentSession session)
+        {
+            throw new InvalidOperationException(
+                "The production WinForms composition requires a ClrAgentSession identity service.");
+        }
+
         var dispatcher = new WinFormsUiDispatcher(_dispatchAnchor);
+        var executionResolver = new CompositeClrExecutionContextResolver(
+            new[] { new WinFormsClrExecutionContextAdapter(dispatcher) });
+        var inspection = new ClrInspectionService(session);
         var adapter = new WinFormsCurrentHwndAdapter(identityService);
-        return new WinFormsHostComposition(
-            dispatcher,
-            new IAgentOperationHandler[]
-            {
-                new BeginCurrentHwndHandler(adapter, dispatcher),
-                new RevalidateCurrentHwndHandler(adapter, dispatcher)
-            });
+        var handlers = new List<IAgentOperationHandler>
+        {
+            new BeginCurrentHwndHandler(adapter, dispatcher),
+            new RevalidateCurrentHwndHandler(adapter, dispatcher)
+        };
+        handlers.AddRange(ClrInspectionHandlerFactory.Create(inspection, executionResolver));
+        return new WinFormsHostComposition(dispatcher, inspection, handlers);
     }
 }
 
 internal sealed class WinFormsHostComposition : IAgentHostComposition, IAgentHostAdapterMetadata
 {
     private readonly IWinFormsTargetDispatcher _dispatcher;
+    private readonly ClrInspectionService _inspection;
 
     public WinFormsHostComposition(
         IWinFormsTargetDispatcher dispatcher,
+        ClrInspectionService inspection,
         IReadOnlyList<IAgentOperationHandler> handlers)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _inspection = inspection ?? throw new ArgumentNullException(nameof(inspection));
         Handlers = handlers ?? throw new ArgumentNullException(nameof(handlers));
     }
 
@@ -63,6 +75,7 @@ internal sealed class WinFormsHostComposition : IAgentHostComposition, IAgentHos
 
     public async ValueTask DisposeAsync()
     {
+        _inspection.Dispose();
         await _dispatcher.DisposeAsync().ConfigureAwait(false);
     }
 }

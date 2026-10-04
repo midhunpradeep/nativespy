@@ -2,7 +2,7 @@
 
 ## Current iteration
 
-**I3 — authenticated Named Pipes Host/Client over preserved UIA3/FlaUI to WinForms correlation**
+**I4a — compact ObjectSpy Lite over authenticated UIA3/FlaUI to WinForms correlation**
 
 ## Implemented
 
@@ -30,21 +30,28 @@
 - bootstrap-only stdout target and production integration port using Named Pipes;
 - repeated-correlation assertion proving stable CLR handle identity and fresh UIA CaptureIds;
 - Protocol, JSON codec, transport, Host/Client session, authentication/request adversarial, late WinForms shutdown, Agent lifetime/concurrency, and live integration tests;
-- deterministic MSBuild artifact handoff from the target project's actual output directory.
+- deterministic MSBuild artifact handoff from the target project's actual output directory;
+- four bounded CLR inspection operations with strict JSON union validation, opaque member IDs, authenticated continuation tokens, weak references, and hard quotas;
+- explicit WinForms execution-context resolution with direct/adapter/unavailable/conflict outcomes and truthful Host timeout/late-work behavior;
+- dedicated serialized MTA UIA3 worker, physical point preview/freeze observations, PID-only candidate validation, and bounded hard-stuck quarantine;
+- `NativeSpy.ObjectSpy` Exact-only coordinator with lazy property reads, member paging, bounded field batches, explicit object-reference navigation, generation-based late-result rejection, and overlay port;
+- runnable WPF-only client `NativeSpy.ObjectSpy.App` with a nonactivating click-through overlay and controlled synthetic WinForms target bootstrap;
+- protocol strictness, Agent value/lifetime, FlaUI quarantine, and live ObjectSpy end-to-end proof tests;
 
 ## Not implemented / deferred
 
 - attach/injection/bootstrap discovery beyond the explicit stdout descriptor and process lifetime integration beyond the single session;
-- explicit leases, renewal, quotas, expiry schedulers, and reconnect semantics;
-- generic reflection/member inspection, ObjectSpy, writes, invocation, and value conversion;
-- WPF, UIA2, ProviderAware, and broader provider selection;
+- explicit leases, renewal, expiry schedulers, and reconnect semantics;
+- attach/injection/bootstrap discovery beyond the controlled I4a target bootstrap;
+- writes, invocation, collection browsing/enumeration, recursive inspection, and full Object Browser behavior;
+- WPF target support, UIA2, ProviderAware, and broader provider selection;
 - .NET Framework, x86, ARM, cross-AppDomain support;
 - complete collectible-ALC unload invalidation and boundary enumeration;
 - generic execution-context/dispatcher infrastructure outside the fixed WinForms dispatcher.
 
 ## Next iterations
 
-- **I4 — minimal generic CLR inspection and ObjectSpy Lite.**
+- **Future** — attach/bootstrap and broader inspection/provider capabilities remain deferred; do not infer those features from I4a.
 
 ## Build status
 
@@ -52,7 +59,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 161 passing, 0 skipped in the verified environment (43 Protocol, 15 Agent, 64 Client, 2 Agent.WinForms, 37 integration).
+- Tests: 170 passing, 0 skipped in the verified environment (46 Protocol, 19 Agent, 64 Client, 2 Agent.WinForms, 1 FlaUI, 38 integration).
 
 ## Known limitations
 
@@ -73,5 +80,8 @@
 4. **Session ownership is strict.** Handles and TypeIds belong to exactly one session and are rejected by another session.
 5. **Boundary identity is runtime-based.** Handle and TypeIdentity BoundaryIds come from actual `AssemblyLoadContext` identity.
 6. **Client owns certainty.** Agent and WinForms emit evidence; Client owns normalization, requirements, certainty, and `SameManagedElement` claims.
+7. **Exact gates CLR identity.** Non-Exact correlation retains evidence but never authorizes CLR inspection.
+8. **Inspection is explicit and bounded.** Metadata does not execute getters; property reads are user-requested; values and member pages obey fixed quotas.
+9. **UIA ownership is isolated.** Live UIA objects stay in FlaUI's serialized MTA session; CLR objects stay Agent-owned; ObjectSpy receives detached facts and transport-neutral ports.
 
-I3 intentionally does not add attach/injection, reflection, generic inspection, ObjectSpy, reconnect, WPF, leases, or multi-client sessions.
+I4a intentionally does not add attach/injection, writes, invocation, collection enumeration, recursive inspection, reconnect, WPF target support, UIA2, leases, or multi-client sessions.

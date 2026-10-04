@@ -1,12 +1,16 @@
 namespace NativeSpy.Protocol.Common;
 
 /// <summary>
-/// Canonical operation names that are part of the detached I3 wire contract.
+/// Canonical operation names that are part of the detached I4a wire contract.
 /// </summary>
 public static class ProtocolOperationNames
 {
     public const string BeginCurrentHwnd = "correlation.winforms.beginCurrentHwnd";
     public const string RevalidateCurrentHwnd = "correlation.winforms.revalidateCurrentHwnd";
+    public const string DescribeObject = "clr.describeObject";
+    public const string ListMembers = "clr.listMembers";
+    public const string ReadFieldValues = "clr.readFieldValues";
+    public const string ReadPropertyValue = "clr.readPropertyValue";
     public const string Hello = "hello";
     public const string HelloResponse = "helloResponse";
     public const string Error = "error";
@@ -32,7 +36,11 @@ public static class ProtocolOperationNames
         Array.AsReadOnly(new[]
         {
             BeginCurrentHwnd,
-            RevalidateCurrentHwnd
+            RevalidateCurrentHwnd,
+            DescribeObject,
+            ListMembers,
+            ReadFieldValues,
+            ReadPropertyValue
         });
 
     public static bool IsCanonical(string? operationName)

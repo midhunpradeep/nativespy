@@ -7,6 +7,7 @@ using Xunit.Sdk;
 
 namespace NativeSpy.IntegrationTests;
 
+[Collection("NativeSpy live UI")]
 public sealed class WinFormsButtonCorrelationTests
 {
     [Fact]

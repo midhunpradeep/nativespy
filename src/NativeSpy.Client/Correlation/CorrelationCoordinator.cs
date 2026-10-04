@@ -22,6 +22,34 @@ public sealed class CorrelationCoordinator
             throw new ArgumentNullException(nameof(externalPort));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        var externalEvidence = await externalPort.CaptureAsync(cancellationToken).ConfigureAwait(false);
+        return await ResolveUiaToWinFormsAsync(
+                externalEvidence,
+                externalPort,
+                targetPort,
+                policy,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<CorrelationResultDto> ResolveUiaToWinFormsAsync(
+        ExternalUiaEvidenceDto externalEvidence,
+        IExternalUiaObservationPort externalPort,
+        IWinFormsCorrelationPort targetPort,
+        CorrelationPolicyDto policy,
+        CancellationToken cancellationToken = default)
+    {
+        if (externalEvidence is null)
+        {
+            throw new ArgumentNullException(nameof(externalEvidence));
+        }
+
+        if (externalPort is null)
+        {
+            throw new ArgumentNullException(nameof(externalPort));
+        }
+
         if (targetPort is null)
         {
             throw new ArgumentNullException(nameof(targetPort));
@@ -38,7 +66,6 @@ public sealed class CorrelationCoordinator
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var externalEvidence = await externalPort.CaptureAsync(cancellationToken).ConfigureAwait(false);
         var source = new CorrelationSourceDto(
             CorrelationSourceKind.ExternalObservation,
             externalObservation: ToLegacyObservationReference(externalEvidence.Source));

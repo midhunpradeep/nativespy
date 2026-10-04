@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\NativeSpy.Protocol.Json\NativeSpy.Protocol.Json.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Transport.NamedPipes\NativeSpy.Transport.NamedPipes.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.FlaUI\NativeSpy.FlaUI.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.ObjectSpy\NativeSpy.ObjectSpy.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
     <TestTargetProjectReference Include="..\NativeSpy.TestTarget.WinForms\NativeSpy.TestTarget.WinForms.csproj" />
     <ProjectReference Include="@(TestTargetProjectReference)">

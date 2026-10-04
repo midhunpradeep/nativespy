@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using NativeSpy.Client.ClrInspection;
 using NativeSpy.Client.Correlation;
+using NativeSpy.Protocol.Clr;
 using NativeSpy.Protocol.Common;
 using NativeSpy.Protocol.Correlation;
 using NativeSpy.Protocol.Json;
@@ -52,7 +54,7 @@ public sealed class NamedPipeProtocolException : Exception
     public ProtocolErrorDto Error { get; }
 }
 
-public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDisposable
+public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspectionPort, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly NamedPipeConnection _connection;
@@ -380,6 +382,114 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
         }
     }
 
+    public async Task<ClrInspectionClientResult<DescribeObjectResponseDto>> DescribeObjectAsync(
+        ManagedObjectRefDto @object,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await SendRequestAsync(
+                    NamedPipeOperationNames.DescribeObject,
+                    ClrInspectionJsonCodec.CreateDescribeObjectPayload(@object),
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return ClrInspectionClientResult<DescribeObjectResponseDto>.Success(
+                ClrInspectionJsonCodec.DeserializeDescribeObjectResponse(ReadSuccessPayload(response)));
+        }
+        catch (NamedPipeOperationException exception)
+        {
+            return ClrInspectionClientResult<DescribeObjectResponseDto>.Failure(exception.Error);
+        }
+        catch (NamedPipeSessionException exception)
+        {
+            return ClrInspectionClientResult<DescribeObjectResponseDto>.Failure(
+                new OperationErrorDto(exception.Code, exception.Message));
+        }
+    }
+
+    public async Task<ClrInspectionClientResult<ListMembersResponseDto>> ListMembersAsync(
+        ManagedObjectRefDto @object,
+        int pageSize,
+        ClrMemberKindFilter filter,
+        string? continuationToken,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = new ListMembersRequestDto(@object, pageSize, filter, continuationToken);
+            var response = await SendRequestAsync(
+                    NamedPipeOperationNames.ListMembers,
+                    ClrInspectionJsonCodec.CreateListMembersPayload(request),
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return ClrInspectionClientResult<ListMembersResponseDto>.Success(
+                ClrInspectionJsonCodec.DeserializeListMembersResponse(ReadSuccessPayload(response)));
+        }
+        catch (NamedPipeOperationException exception)
+        {
+            return ClrInspectionClientResult<ListMembersResponseDto>.Failure(exception.Error);
+        }
+        catch (NamedPipeSessionException exception)
+        {
+            return ClrInspectionClientResult<ListMembersResponseDto>.Failure(
+                new OperationErrorDto(exception.Code, exception.Message));
+        }
+    }
+
+    public async Task<ClrInspectionClientResult<ReadFieldValuesResponseDto>> ReadFieldValuesAsync(
+        ManagedObjectRefDto @object,
+        IReadOnlyList<MemberRefDto> members,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = new ReadFieldValuesRequestDto(@object, members);
+            var response = await SendRequestAsync(
+                    NamedPipeOperationNames.ReadFieldValues,
+                    ClrInspectionJsonCodec.CreateReadFieldValuesPayload(request),
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return ClrInspectionClientResult<ReadFieldValuesResponseDto>.Success(
+                ClrInspectionJsonCodec.DeserializeReadFieldValuesResponse(ReadSuccessPayload(response)));
+        }
+        catch (NamedPipeOperationException exception)
+        {
+            return ClrInspectionClientResult<ReadFieldValuesResponseDto>.Failure(exception.Error);
+        }
+        catch (NamedPipeSessionException exception)
+        {
+            return ClrInspectionClientResult<ReadFieldValuesResponseDto>.Failure(
+                new OperationErrorDto(exception.Code, exception.Message));
+        }
+    }
+
+    public async Task<ClrInspectionClientResult<ReadPropertyValueResponseDto>> ReadPropertyValueAsync(
+        ManagedObjectRefDto @object,
+        MemberRefDto member,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = new ReadPropertyValueRequestDto(@object, member);
+            var response = await SendRequestAsync(
+                    NamedPipeOperationNames.ReadPropertyValue,
+                    ClrInspectionJsonCodec.CreateReadPropertyValuePayload(request),
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return ClrInspectionClientResult<ReadPropertyValueResponseDto>.Success(
+                ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse(ReadSuccessPayload(response)));
+        }
+        catch (NamedPipeOperationException exception)
+        {
+            return ClrInspectionClientResult<ReadPropertyValueResponseDto>.Failure(exception.Error);
+        }
+        catch (NamedPipeSessionException exception)
+        {
+            return ClrInspectionClientResult<ReadPropertyValueResponseDto>.Failure(
+                new OperationErrorDto(exception.Code, exception.Message));
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         TransitionTerminal(new NamedPipeSessionException(
@@ -567,6 +677,21 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
             throw new NamedPipeProtocolException(
                 new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation, "The Host hello response is invalid."));
         }
+    }
+
+    private static JsonElement ReadSuccessPayload(ResponseEnvelopeWire response)
+    {
+        return response.ResultStatus switch
+        {
+            ProtocolJsonCodec.SuccessStatus when response.Payload is JsonElement payload
+                => payload,
+            ProtocolJsonCodec.OperationErrorStatus when response.OperationError is not null
+                => throw new NamedPipeOperationException(ToOperationError(response.OperationError)),
+            ProtocolJsonCodec.ProtocolErrorStatus when response.ProtocolError is not null
+                => throw new NamedPipeProtocolException(ToProtocolError(response.ProtocolError)),
+            _ => throw new NamedPipeProtocolException(
+                new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation))
+        };
     }
 
     private static FrameworkCorrelationEvidenceDto ReadFrameworkResponse(ResponseEnvelopeWire response)

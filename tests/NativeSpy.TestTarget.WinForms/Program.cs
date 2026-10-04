@@ -65,4 +65,51 @@ internal sealed class MainForm : Form
     }
 
     public Button TestButton { get; }
+
+    public string PublicText = "public field";
+    public int PublicNumber = 42;
+    public decimal PublicDecimal = 12.5m;
+    public InspectableChild PublicReference = new();
+    public InspectableStruct PublicStruct = new(7, "struct value");
+    public InspectableEnum PublicEnum = InspectableEnum.Ready;
+    public string LongPublicText = new('x', 5_000);
+
+    public int GetterReads { get; private set; }
+
+    public string CountingProperty
+    {
+        get
+        {
+            GetterReads++;
+            return "getter value";
+        }
+    }
+
+    public InspectableChild ChildProperty => PublicReference;
+
+    public string ThrowingProperty => throw new InvalidOperationException("target-only detail");
+}
+
+public sealed class InspectableChild
+{
+    public string ChildText = "child field";
+    public int ChildNumber = 7;
+}
+
+public enum InspectableEnum
+{
+    Ready = 7,
+    Other = 9
+}
+
+public readonly struct InspectableStruct
+{
+    public InspectableStruct(int number, string text)
+    {
+        Number = number;
+        Text = text;
+    }
+
+    public readonly int Number;
+    public readonly string Text;
 }

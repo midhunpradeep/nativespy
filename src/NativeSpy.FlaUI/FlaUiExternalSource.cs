@@ -8,46 +8,54 @@ using NativeSpy.Protocol.Correlation;
 namespace NativeSpy.FlaUI;
 
 /// <summary>
-/// Retains one live FlaUI source internally while exposing detached Client evidence.
-/// Capture identity and Client proof phase are owned by the caller, not this adapter.
+/// Retains one live FlaUI source inside NativeSpy.FlaUI while exposing detached Client evidence.
+/// All live UIA calls are scheduled on the owning session's MTA worker.
 /// </summary>
 public sealed class FlaUiExternalSource : IExternalUiaObservationPort
 {
+    private readonly FlaUiAutomationSession _session;
     private readonly AutomationBase _automation;
     private readonly AutomationElement _element;
     private readonly int _attachedProcessId;
     private readonly string _observationId;
-    private readonly object _gate = new();
 
     internal FlaUiExternalSource(
+        FlaUiAutomationSession session,
         AutomationBase automation,
         AutomationElement element,
         int attachedProcessId)
     {
+        _session = session ?? throw new ArgumentNullException(nameof(session));
         _automation = automation ?? throw new ArgumentNullException(nameof(automation));
         _element = element ?? throw new ArgumentNullException(nameof(element));
         if (attachedProcessId <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(attachedProcessId), attachedProcessId, "ProcessId must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(attachedProcessId));
         }
 
         _attachedProcessId = attachedProcessId;
         _observationId = $"uia-observation-{Guid.NewGuid():N}";
     }
 
-    public Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken)
+    public async Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var capture = new ExternalUiaCaptureRefDto(
             _observationId,
             $"uia-capture-{Guid.NewGuid():N}");
-        lock (_gate)
+        try
         {
-            return Task.FromResult(CaptureCore(capture));
+            return await _session
+                .ExecuteAsync(() => CaptureCore(capture), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (IsExpectedUiaFailure(exception))
+        {
+            return CreateCaptureFailure(capture, exception);
         }
     }
 
-    public Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
+    public async Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
         ExternalUiaCaptureRefDto capture,
         ulong hwnd,
         CancellationToken cancellationToken)
@@ -56,7 +64,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
         cancellationToken.ThrowIfCancellationRequested();
         if (hwnd == 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(hwnd), hwnd, "HWND must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(hwnd));
         }
 
         if (!string.Equals(capture.ObservationId, _observationId, StringComparison.Ordinal))
@@ -66,9 +74,25 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
                 nameof(capture));
         }
 
-        lock (_gate)
+        try
         {
-            return Task.FromResult(CompareCore(capture, hwnd));
+            return await _session
+                .ExecuteAsync(() => CompareCore(capture, hwnd), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (IsExpectedUiaFailure(exception))
+        {
+            return new ExternalUiaEqualityEvidenceDto(
+                capture,
+                hwnd,
+                new[]
+                {
+                    Fact("SourceAvailable", ProofOutcome.NotAvailable, exception.Message),
+                    Fact("ElementFromHandle", ProofOutcome.NotAvailable, exception.Message),
+                    Fact("CompareElements", ProofOutcome.NotAvailable, exception.Message)
+                },
+                new[] { new CorrelationLimitationDto("ExternalEqualityUnavailable", exception.Message) },
+                new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));
         }
     }
 
@@ -85,9 +109,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
             var facts = new List<CorrelationEvidenceFactDto>
             {
                 Fact("SourceAvailable", sourceAvailable ? ProofOutcome.Passed : ProofOutcome.Failed),
-                Fact(
-                    "CurrentHwndObserved",
-                    observedHwnd is null ? ProofOutcome.Failed : ProofOutcome.Passed),
+                Fact("CurrentHwndObserved", observedHwnd is null ? ProofOutcome.Failed : ProofOutcome.Passed),
                 Fact(
                     "ExternalElementProcessIdentity",
                     elementProcessId == _attachedProcessId
@@ -107,18 +129,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
         }
         catch (Exception exception) when (IsExpectedUiaFailure(exception))
         {
-            return new ExternalUiaEvidenceDto(
-                capture,
-                _attachedProcessId,
-                observedHwnd: null,
-                new[]
-                {
-                    Fact("SourceAvailable", ProofOutcome.NotAvailable, exception.Message),
-                    Fact("CurrentHwndObserved", ProofOutcome.NotAvailable, exception.Message),
-                    Fact("ExternalElementProcessIdentity", ProofOutcome.NotAvailable, exception.Message)
-                },
-                new[] { new CorrelationLimitationDto("ExternalCaptureUnavailable", exception.Message) },
-                new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));
+            return CreateCaptureFailure(capture, exception);
         }
     }
 
@@ -148,9 +159,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
                 ? _automation.FromHandle(new IntPtr(unchecked((long)hwnd)))
                 : null;
             var elementAvailable = current is not null;
-            facts.Add(Fact(
-                "ElementFromHandle",
-                elementAvailable ? ProofOutcome.Passed : ProofOutcome.Failed));
+            facts.Add(Fact("ElementFromHandle", elementAvailable ? ProofOutcome.Passed : ProofOutcome.Failed));
             if (!elementAvailable)
             {
                 facts.Add(Fact("CompareElements", ProofOutcome.NotAvailable));
@@ -162,9 +171,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
             }
 
             var elementsEqual = _automation.Compare(_element, current!);
-            facts.Add(Fact(
-                "CompareElements",
-                elementsEqual ? ProofOutcome.Passed : ProofOutcome.Failed));
+            facts.Add(Fact("CompareElements", elementsEqual ? ProofOutcome.Passed : ProofOutcome.Failed));
             return new ExternalUiaEqualityEvidenceDto(
                 capture,
                 hwnd,
@@ -187,6 +194,24 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
                 new[] { new CorrelationLimitationDto("ExternalEqualityUnavailable", exception.Message) },
                 new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));
         }
+    }
+
+    private ExternalUiaEvidenceDto CreateCaptureFailure(
+        ExternalUiaCaptureRefDto capture,
+        Exception exception)
+    {
+        return new ExternalUiaEvidenceDto(
+            capture,
+            _attachedProcessId,
+            observedHwnd: null,
+            new[]
+            {
+                Fact("SourceAvailable", ProofOutcome.NotAvailable, exception.Message),
+                Fact("CurrentHwndObserved", ProofOutcome.NotAvailable, exception.Message),
+                Fact("ExternalElementProcessIdentity", ProofOutcome.NotAvailable, exception.Message)
+            },
+            new[] { new CorrelationLimitationDto("ExternalCaptureUnavailable", exception.Message) },
+            new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message));
     }
 
     private static CorrelationEvidenceFactDto Fact(
@@ -217,6 +242,7 @@ public sealed class FlaUiExternalSource : IExternalUiaObservationPort
         return exception is COMException
             or InvalidOperationException
             or TimeoutException
-            or ArgumentException;
+            or ArgumentException
+            or FlaUiSessionException;
     }
 }

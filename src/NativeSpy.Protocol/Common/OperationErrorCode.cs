@@ -15,5 +15,10 @@ public enum OperationErrorCode
     SerializationLimit,
     TargetExited,
     ObjectCollected,
-    RuntimeUnavailable
+    RuntimeUnavailable,
+    InvalidMemberReference,
+    InvalidContinuation,
+    MemberUnavailable,
+    RegistryQuotaExceeded,
+    ExecutionContextConflict
 }
