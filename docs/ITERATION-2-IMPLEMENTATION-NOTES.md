@@ -142,7 +142,7 @@ The synthetic target creates exactly one `ClrAgentSession` and passes the same i
 - `WinFormsCurrentHwndAdapter`;
 - the test bridge.
 
-`TestManagedHandleTable` was removed. `readText` acquires through production Agent, retains the target only for the bounded UI-thread operation, and returns a private test-wire error code on failure. The JSON Lines bridge remains test-only and is not production transport.
+`TestManagedHandleTable` was removed. The former text-inspection probe acquired through the production Agent, retained the target only for the bounded UI-thread operation, and returned a private test-wire error code on failure. That JSON Lines bridge was test-only and is not production transport.
 
 ## Verification tests
 

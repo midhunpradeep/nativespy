@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Protocol.Json\NativeSpy.Protocol.Json.csproj" />
   </ItemGroup>
 </Project>

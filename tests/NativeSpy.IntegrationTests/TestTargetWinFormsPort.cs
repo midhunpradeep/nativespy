@@ -17,8 +17,7 @@ internal sealed class TestTargetWinFormsPort : IWinFormsCorrelationPort
         ulong hwnd,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_target.Begin(hwnd));
+        return _target.Session.BeginCurrentHwndAsync(hwnd, cancellationToken);
     }
 
     public Task<FrameworkCorrelationEvidenceDto> RevalidateCurrentHwndAsync(
@@ -26,7 +25,6 @@ internal sealed class TestTargetWinFormsPort : IWinFormsCorrelationPort
         HandleRefDto candidateHandle,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_target.Revalidate(hwnd, candidateHandle));
+        return _target.Session.RevalidateCurrentHwndAsync(hwnd, candidateHandle, cancellationToken);
     }
 }

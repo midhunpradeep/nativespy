@@ -10,6 +10,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\NativeSpy.Agent.WinForms\NativeSpy.Agent.WinForms.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Agent.Host\NativeSpy.Agent.Host.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Agent.Host.WinForms\NativeSpy.Agent.Host.WinForms.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Protocol.Json\NativeSpy.Protocol.Json.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Transport.NamedPipes\NativeSpy.Transport.NamedPipes.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Agent\NativeSpy.Agent.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
   </ItemGroup>

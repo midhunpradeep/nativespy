@@ -75,29 +75,5 @@ public sealed class WinFormsButtonCorrelationTests
         Assert.Equal(managed.Handle.BoundaryId, secondManaged.Handle.BoundaryId);
         Assert.Equal(managed.TypeIdentity?.TypeId, secondManaged.TypeIdentity?.TypeId);
 
-        var formEvidence = target.Begin(target.MainWindowHwnd);
-        var formManaged = Assert.IsType<ManagedObjectRefDto>(formEvidence.CandidateTarget?.Managed);
-        Assert.NotEqual(managed.TypeIdentity?.TypeId, formManaged.TypeIdentity?.TypeId);
-        Assert.Equal(formManaged.Handle.BoundaryId, formManaged.TypeIdentity?.BoundaryId);
-        Assert.Contains(
-            formEvidence.EvidenceFacts,
-            fact => fact.Name == "ControlFromHandle" && fact.Outcome == ProofOutcome.Passed);
-        Assert.Contains("WinForms.Control.FromHandle", formEvidence.Effects.Operations);
-        Assert.NotEmpty(formEvidence.AdapterMetadata);
-        Assert.Empty(formEvidence.Limitations);
-        Assert.Null(formEvidence.OperationError);
-
-        var forgedGeneration = new HandleRefDto(
-            managed.Handle.SessionId,
-            managed.Handle.HandleId,
-            managed.Handle.Generation + 1,
-            managed.Handle.Kind,
-            managed.Handle.BoundaryId);
-        var forgedException = Assert.Throws<TestTargetOperationException>(
-            () => target.ReadText(forgedGeneration));
-        Assert.Equal(OperationErrorCode.StaleHandle, forgedException.Code);
-
-        var text = target.ReadText(managed.Handle);
-        Assert.Equal("NativeSpy Test Button", text);
     }
 }
