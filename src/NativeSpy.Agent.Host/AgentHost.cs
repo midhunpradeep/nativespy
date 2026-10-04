@@ -15,6 +15,8 @@ public sealed class AgentHost : IAsyncDisposable
     private readonly object _gate = new();
     private readonly AgentHostOptions _options;
     private readonly IAgentHostCompositionFactory _compositionFactory;
+    private readonly AgentHostListenerFactory _listenerFactory;
+    private readonly string[] _declaredOperationNames;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<ulong, Task> _inflight = new();
     private readonly TaskCompletionSource<object?> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -37,9 +39,22 @@ public sealed class AgentHost : IAsyncDisposable
     public AgentHost(
         AgentHostOptions options,
         IAgentHostCompositionFactory compositionFactory)
+        : this(options, compositionFactory, static serverOptions => new NamedPipeServer(serverOptions))
+    {
+    }
+
+    internal AgentHost(
+        AgentHostOptions options,
+        IAgentHostCompositionFactory compositionFactory,
+        AgentHostListenerFactory listenerFactory)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _compositionFactory = compositionFactory ?? throw new ArgumentNullException(nameof(compositionFactory));
+        _listenerFactory = listenerFactory ?? throw new ArgumentNullException(nameof(listenerFactory));
+        _declaredOperationNames = compositionFactory.DeclaredOperationNames?.ToArray()
+            ?? throw new ArgumentException(
+                "The Host composition factory must declare its operation names.",
+                nameof(compositionFactory));
         BootstrapDescriptor = _options.CreateBootstrapDescriptor();
     }
 
@@ -70,21 +85,34 @@ public sealed class AgentHost : IAsyncDisposable
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
-        {
-            if (_state != AgentHostState.Created)
-            {
-                throw new InvalidOperationException("The Agent Host has already been started.");
-            }
+        ValidateOperationDeclarations(_declaredOperationNames);
 
-            _server = new NamedPipeServer(new NamedPipeServerOptions(
-                _options.PipeName,
-                _options.AllowedUserSid,
-                _options.MaximumFrameBytes));
-            _requestSlots = new SemaphoreSlim(_options.MaximumOutstandingRequests);
-            _state = AgentHostState.Listening;
-            _acceptLoop = AcceptLoopAsync(_shutdown.Token);
-            _bootstrapExpiry = ExpireBootstrapAsync(_shutdown.Token);
+        NamedPipeServer? server = null;
+        try
+        {
+            lock (_gate)
+            {
+                if (_state != AgentHostState.Created)
+                {
+                    throw new InvalidOperationException("The Agent Host has already been started.");
+                }
+
+                server = _listenerFactory(new NamedPipeServerOptions(
+                    _options.PipeName,
+                    _options.AllowedUserSid,
+                    _options.MaximumFrameBytes));
+                server.Bind();
+                _server = server;
+                _requestSlots = new SemaphoreSlim(_options.MaximumOutstandingRequests);
+                _state = AgentHostState.Listening;
+                _acceptLoop = AcceptLoopAsync(_shutdown.Token);
+                _bootstrapExpiry = ExpireBootstrapAsync(_shutdown.Token);
+            }
+        }
+        catch
+        {
+            server?.DisposeAsync().GetAwaiter().GetResult();
+            throw;
         }
 
         return Task.CompletedTask;
@@ -104,7 +132,7 @@ public sealed class AgentHost : IAsyncDisposable
             }
 
             _state = AgentHostState.Closing;
-            _nonceValid = false;
+            InvalidateNonce();
             connection = _connection;
             _connection = null;
             server = _server;
@@ -191,8 +219,6 @@ public sealed class AgentHost : IAsyncDisposable
                     {
                         return;
                     }
-
-                    _state = AgentHostState.Authenticating;
                 }
 
                 var server = _server;
@@ -201,7 +227,17 @@ public sealed class AgentHost : IAsyncDisposable
                     return;
                 }
 
+                server.Bind();
                 candidate = await server.AcceptAsync(cancellationToken).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    if (_state != AgentHostState.Listening)
+                    {
+                        throw new OperationCanceledException("The Host stopped while accepting a client.");
+                    }
+
+                    _state = AgentHostState.Authenticating;
+                }
                 using var handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 handshakeCancellation.CancelAfter(_options.HandshakeTimeout);
                 var activated = await AuthenticateAndActivateAsync(
@@ -276,7 +312,16 @@ public sealed class AgentHost : IAsyncDisposable
         NamedPipeFrame? frame = null;
         try
         {
-            frame = await connection.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                frame = await connection.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException exception)
+            {
+                WriteDiagnostic("The Agent Host rejected a disconnected or malformed hello frame.", exception);
+                return false;
+            }
+
             if (frame is null)
             {
                 return false;
@@ -344,6 +389,7 @@ public sealed class AgentHost : IAsyncDisposable
                 composition = _compositionFactory.Create(session, context)
                     ?? throw new InvalidOperationException("The Host composition factory returned null.");
                 var handlers = FreezeComposition(composition);
+                EnsureDeclaredRegistryMatches(handlers);
                 var adapterIds = composition is IAgentHostAdapterMetadata metadata
                     ? metadata.AdapterIds.ToArray()
                     : Array.Empty<string>();
@@ -355,7 +401,6 @@ public sealed class AgentHost : IAsyncDisposable
                         throw new OperationCanceledException("The Host stopped during activation.");
                     }
 
-                    _state = AgentHostState.Activating;
                     _selectedProtocolVersion = selectedVersion;
                     _activeSessionId = session.SessionId;
                     _session = session;
@@ -363,10 +408,10 @@ public sealed class AgentHost : IAsyncDisposable
                     _handlers = handlers;
                     _adapterIds = adapterIds;
                     _connection = connection;
-                    _nonceValid = false;
+                    InvalidateNonce();
                     session = null;
                     composition = null;
-                    _state = AgentHostState.Active;
+                    _state = AgentHostState.Activating;
                 }
 
                 var response = new HelloResponseWire
@@ -388,7 +433,7 @@ public sealed class AgentHost : IAsyncDisposable
                     Limits = new LimitsWire
                     {
                         MaxFrameBytes = _options.MaximumFrameBytes,
-                        MaxJsonDepth = _options.MaximumJsonDepth,
+                        MaxJsonDepth = ProtocolWireConstants.DefaultMaximumJsonDepth,
                         DefaultBudgetMs = _options.DefaultBudgetMs,
                         MaxBudgetMs = _options.MaxBudgetMs,
                         MaxOutstandingRequests = _options.MaximumOutstandingRequests
@@ -408,6 +453,16 @@ public sealed class AgentHost : IAsyncDisposable
                 {
                     await StopAsync().ConfigureAwait(false);
                     return false;
+                }
+
+                lock (_gate)
+                {
+                    if (_state != AgentHostState.Activating)
+                    {
+                        throw new OperationCanceledException("The Host stopped before activation completed.");
+                    }
+
+                    _state = AgentHostState.Active;
                 }
 
                 return true;
@@ -630,6 +685,7 @@ public sealed class AgentHost : IAsyncDisposable
         SemaphoreSlim slots)
     {
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        using var timeoutCancellation = new CancellationTokenSource();
         var context = new AgentRequestContext(
             requestNumber,
             request.RequestId,
@@ -639,97 +695,167 @@ public sealed class AgentHost : IAsyncDisposable
         var handlerTask = Task.Run(
             () => handler.HandleAsync(context, request.Payload, requestCancellation.Token),
             CancellationToken.None);
-        var timeoutTask = Task.Delay(context.Remaining);
+        var preparationTask = PrepareResponseAsync(handlerTask, request);
+        var timeoutTask = Task.Delay(context.Remaining, timeoutCancellation.Token);
+        var responseState = new ResponseCommitState();
+        var slotReleasedByLateObserver = false;
 
         try
         {
-            var winner = await Task.WhenAny(handlerTask, timeoutTask).ConfigureAwait(false);
-            if (winner == timeoutTask && !handlerTask.IsCompleted)
+            var winner = await Task.WhenAny(preparationTask, timeoutTask).ConfigureAwait(false);
+            if (winner == timeoutTask && !preparationTask.IsCompleted)
             {
                 requestCancellation.Cancel();
-                await SendOperationErrorAsync(
-                        connection,
-                        request.RequestId,
-                        new OperationErrorDto(OperationErrorCode.TargetTimeout, "The operation budget expired."))
-                    .ConfigureAwait(false);
-                _ = ObserveLateHandlerAsync(handlerTask);
+                slotReleasedByLateObserver = true;
+                if (responseState.TryCommit())
+                {
+                    await CommitTimeoutResponseAsync(connection, request.RequestId).ConfigureAwait(false);
+                }
+
+                _ = ObserveLatePreparationAsync(preparationTask, slots);
                 return;
             }
 
-            AgentHandlerResult result;
-            try
+            var prepared = await preparationTask.ConfigureAwait(false);
+            if (prepared.NoResponse)
             {
-                result = await handlerTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (AgentOperationDispatchException exception)
-            {
-                await SendOperationErrorAsync(connection, request.RequestId, exception.Error).ConfigureAwait(false);
-                return;
-            }
-            catch (ProtocolJsonException exception)
-            {
-                WriteDiagnostic("The operation payload was invalid.", exception);
-                await SendProtocolErrorAsync(
-                        connection,
-                        request.RequestId,
-                        ProtocolErrorCode.InvalidRequest)
-                    .ConfigureAwait(false);
-                return;
-            }
-            catch (Exception exception)
-            {
-                WriteDiagnostic("An operation handler failed unexpectedly.", exception);
-                await SendProtocolErrorAsync(
-                        connection,
-                        request.RequestId,
-                        ProtocolErrorCode.InternalFailure)
-                    .ConfigureAwait(false);
-                await StopAsync().ConfigureAwait(false);
                 return;
             }
 
             if (context.IsExpired)
             {
-                await SendOperationErrorAsync(
-                        connection,
-                        request.RequestId,
-                        new OperationErrorDto(OperationErrorCode.TargetTimeout, "The operation budget expired."))
-                    .ConfigureAwait(false);
+                requestCancellation.Cancel();
+                if (responseState.TryCommit())
+                {
+                    await CommitTimeoutResponseAsync(connection, request.RequestId).ConfigureAwait(false);
+                }
+
                 return;
             }
 
-            ResponseEnvelopeWire response;
-            if (result.OperationError is not null)
+            if (!responseState.TryCommit())
             {
-                response = CreateOperationErrorResponse(request.RequestId, result.OperationError);
+                return;
             }
-            else if (result.Payload is JsonElement payload)
+
+            if (prepared.Bytes is null)
             {
-                response = new ResponseEnvelopeWire
-                {
-                    ProtocolVersion = _selectedProtocolVersion,
-                    SessionId = SessionId!,
-                    RequestId = request.RequestId,
-                    ResultStatus = ProtocolJsonCodec.SuccessStatus,
-                    Payload = payload.Clone()
-                };
-            }
-            else
-            {
-                await SendProtocolErrorAsync(
-                        connection,
-                        request.RequestId,
-                        ProtocolErrorCode.InternalFailure)
-                    .ConfigureAwait(false);
                 await StopAsync().ConfigureAwait(false);
                 return;
             }
 
-            await SendCommittedResponseAsync(connection, response).ConfigureAwait(false);
+            await CommitBytesAsync(connection, prepared.Bytes).ConfigureAwait(false);
+            if (prepared.TerminateSession)
+            {
+                await StopAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            timeoutCancellation.Cancel();
+            if (!slotReleasedByLateObserver)
+            {
+                slots.Release();
+            }
+        }
+    }
+
+    private async Task<PreparedResponse> PrepareResponseAsync(
+        Task<AgentHandlerResult> handlerTask,
+        RequestEnvelopeWire request)
+    {
+        AgentHandlerResult result;
+        try
+        {
+            result = await handlerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            return PreparedResponse.None;
+        }
+        catch (AgentOperationDispatchException exception)
+        {
+            return SerializePreparedResponse(
+                CreateOperationErrorResponse(request.RequestId, exception.Error),
+                terminateSession: false);
+        }
+        catch (ProtocolJsonException exception)
+        {
+            WriteDiagnostic("The operation payload was invalid.", exception);
+            return SerializePreparedResponse(
+                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InvalidRequest),
+                terminateSession: false);
+        }
+        catch (Exception exception)
+        {
+            WriteDiagnostic("An operation handler failed unexpectedly.", exception);
+            return SerializePreparedResponse(
+                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InternalFailure),
+                terminateSession: true);
+        }
+
+        ResponseEnvelopeWire response;
+        if (result.OperationError is not null)
+        {
+            response = CreateOperationErrorResponse(request.RequestId, result.OperationError);
+        }
+        else if (result.Payload is JsonElement payload)
+        {
+            response = new ResponseEnvelopeWire
+            {
+                ProtocolVersion = _selectedProtocolVersion,
+                SessionId = SessionId!,
+                RequestId = request.RequestId,
+                ResultStatus = ProtocolJsonCodec.SuccessStatus,
+                Payload = payload.Clone()
+            };
+        }
+        else
+        {
+            return SerializePreparedResponse(
+                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InternalFailure),
+                terminateSession: true);
+        }
+
+        return SerializePreparedResponse(response, terminateSession: false);
+    }
+
+    private PreparedResponse SerializePreparedResponse(
+        ResponseEnvelopeWire response,
+        bool terminateSession)
+    {
+        var bytes = TrySerializeResponse(response);
+        if (bytes is null)
+        {
+            WriteDiagnostic("The Host response could not be serialized.");
+            bytes = TrySerializeResponse(
+                CreateProtocolErrorResponse(response.RequestId, ProtocolErrorCode.InternalFailure));
+            terminateSession = true;
+        }
+
+        if (bytes is not null && bytes.Length > _options.MaximumFrameBytes)
+        {
+            bytes = TrySerializeResponse(
+                CreateProtocolErrorResponse(response.RequestId, ProtocolErrorCode.ResponseTooLarge));
+            terminateSession = false;
+        }
+
+        return bytes is null || bytes.Length > _options.MaximumFrameBytes
+            ? PreparedResponse.TerminalWithoutResponse
+            : new PreparedResponse(bytes, terminateSession);
+    }
+
+    private async Task ObserveLatePreparationAsync(
+        Task<PreparedResponse> preparationTask,
+        SemaphoreSlim slots)
+    {
+        try
+        {
+            await preparationTask.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            WriteDiagnostic("A timed-out operation completed with an exception.", exception);
         }
         finally
         {
@@ -737,32 +863,42 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
+    private sealed class PreparedResponse
+    {
+        public static PreparedResponse None { get; } = new(null, false, noResponse: true);
+
+        public static PreparedResponse TerminalWithoutResponse { get; } = new(null, true);
+
+        public PreparedResponse(
+            byte[]? bytes,
+            bool terminateSession,
+            bool noResponse = false)
+        {
+            Bytes = bytes;
+            TerminateSession = terminateSession;
+            NoResponse = noResponse;
+        }
+
+        public byte[]? Bytes { get; }
+
+        public bool TerminateSession { get; }
+
+        public bool NoResponse { get; }
+    }
+
+    private sealed class ResponseCommitState
+    {
+        private int _committed;
+
+        public bool TryCommit()
+        {
+            return Interlocked.CompareExchange(ref _committed, 1, 0) == 0;
+        }
+    }
+
     private void RemoveInflight(ulong requestNumber)
     {
         _inflight.TryRemove(requestNumber, out var ignored);
-    }
-
-    private async Task ObserveLateHandlerAsync(Task<AgentHandlerResult> handlerTask)
-    {
-        try
-        {
-            await handlerTask.ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            WriteDiagnostic("A timed-out operation completed with an exception.", exception);
-        }
-    }
-
-    private async Task SendOperationErrorAsync(
-        NamedPipeConnection connection,
-        string requestId,
-        OperationErrorDto error)
-    {
-        await SendCommittedResponseAsync(
-                connection,
-                CreateOperationErrorResponse(requestId, error))
-            .ConfigureAwait(false);
     }
 
     private async Task SendProtocolErrorAsync(
@@ -796,47 +932,45 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
+    private async Task CommitTimeoutResponseAsync(
+        NamedPipeConnection connection,
+        string requestId)
+    {
+        var prepared = SerializePreparedResponse(
+            CreateOperationErrorResponse(
+                requestId,
+                new OperationErrorDto(
+                    OperationErrorCode.TargetTimeout,
+                    "The operation budget expired.")),
+            terminateSession: false);
+        if (prepared.Bytes is null)
+        {
+            await StopAsync().ConfigureAwait(false);
+            return;
+        }
+
+        await CommitBytesAsync(connection, prepared.Bytes).ConfigureAwait(false);
+    }
+
     private async Task SendCommittedResponseAsync(
         NamedPipeConnection connection,
         ResponseEnvelopeWire response)
     {
-        byte[] bytes;
-        try
+        var prepared = SerializePreparedResponse(response, terminateSession: false);
+        if (prepared.Bytes is null)
         {
-            bytes = ProtocolJsonCodec.SerializeResponse(response);
-        }
-        catch (ProtocolJsonException exception)
-        {
-            WriteDiagnostic("The Host response could not be serialized.", exception);
-            bytes = ProtocolJsonCodec.SerializeResponse(new ResponseEnvelopeWire
-            {
-                ProtocolVersion = _selectedProtocolVersion,
-                SessionId = SessionId!,
-                RequestId = response.RequestId,
-                ResultStatus = ProtocolJsonCodec.ProtocolErrorStatus,
-                ProtocolError = new ProtocolErrorWire
-                {
-                    Code = nameof(ProtocolErrorCode.InternalFailure)
-                }
-            });
+            await StopAsync().ConfigureAwait(false);
+            return;
         }
 
-        if (bytes.Length > _options.MaximumFrameBytes)
-        {
-            bytes = ProtocolJsonCodec.SerializeResponse(new ResponseEnvelopeWire
-            {
-                ProtocolVersion = _selectedProtocolVersion,
-                SessionId = SessionId!,
-                RequestId = response.RequestId,
-                ResultStatus = ProtocolJsonCodec.ProtocolErrorStatus,
-                ProtocolError = new ProtocolErrorWire
-                {
-                    Code = nameof(ProtocolErrorCode.ResponseTooLarge)
-                }
-            });
-        }
+        await CommitBytesAsync(connection, prepared.Bytes).ConfigureAwait(false);
+    }
 
-        if (bytes.Length > _options.MaximumFrameBytes)
+    private async Task CommitBytesAsync(
+        NamedPipeConnection connection,
+        byte[] bytes)
+    {
+        if (bytes.Length == 0 || bytes.Length > _options.MaximumFrameBytes)
         {
             await StopAsync().ConfigureAwait(false);
             return;
@@ -851,6 +985,33 @@ public sealed class AgentHost : IAsyncDisposable
             WriteDiagnostic("The Agent Host could not write a response.", exception);
             await StopAsync().ConfigureAwait(false);
         }
+    }
+
+    private byte[]? TrySerializeResponse(ResponseEnvelopeWire response)
+    {
+        try
+        {
+            return ProtocolJsonCodec.SerializeResponse(response);
+        }
+        catch (ProtocolJsonException exception)
+        {
+            WriteDiagnostic("The Host response could not be serialized.", exception);
+            return null;
+        }
+    }
+
+    private ResponseEnvelopeWire CreateProtocolErrorResponse(
+        string requestId,
+        ProtocolErrorCode code)
+    {
+        return new ResponseEnvelopeWire
+        {
+            ProtocolVersion = _selectedProtocolVersion,
+            SessionId = SessionId!,
+            RequestId = requestId,
+            ResultStatus = ProtocolJsonCodec.ProtocolErrorStatus,
+            ProtocolError = new ProtocolErrorWire { Code = Enum.GetName(typeof(ProtocolErrorCode), code)! }
+        };
     }
 
     private async Task SendHandshakeErrorAsync(
@@ -902,6 +1063,7 @@ public sealed class AgentHost : IAsyncDisposable
                 throw new InvalidOperationException("A Host operation handler must have a name.");
             }
 
+            ValidateOperationName(handler.OperationName);
             if (!names.Add(handler.OperationName))
             {
                 throw new InvalidOperationException(
@@ -910,6 +1072,53 @@ public sealed class AgentHost : IAsyncDisposable
         }
 
         return handlers;
+    }
+
+    private static void ValidateOperationDeclarations(IReadOnlyList<string> operationNames)
+    {
+        if (operationNames is null)
+        {
+            throw new InvalidOperationException("The Host operation declarations are missing.");
+        }
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var operationName in operationNames)
+        {
+            ValidateOperationName(operationName);
+            if (!names.Add(operationName))
+            {
+                throw new InvalidOperationException(
+                    $"The Host operation '{operationName}' was declared more than once.");
+            }
+        }
+    }
+
+    private static void ValidateOperationName(string operationName)
+    {
+        if (ProtocolOperationNames.IsReserved(operationName))
+        {
+            throw new InvalidOperationException(
+                $"The Host operation '{operationName}' uses a reserved protocol name.");
+        }
+
+        if (!ProtocolOperationNames.IsCanonical(operationName))
+        {
+            throw new InvalidOperationException(
+                $"The Host operation '{operationName}' is not a canonical dotted operation name.");
+        }
+    }
+
+    private void EnsureDeclaredRegistryMatches(IReadOnlyList<IAgentOperationHandler> handlers)
+    {
+        var actual = handlers
+            .Select(handler => handler.OperationName)
+            .ToHashSet(StringComparer.Ordinal);
+        var declared = _declaredOperationNames.ToHashSet(StringComparer.Ordinal);
+        if (!actual.SetEquals(declared))
+        {
+            throw new InvalidOperationException(
+                "The activated Host handler registry does not match its fixed operation declarations.");
+        }
     }
 
     private bool ProcessIdentityMatches(ProcessIdentityWire identity)
@@ -929,12 +1138,14 @@ public sealed class AgentHost : IAsyncDisposable
         }
 
         byte[]? decoded = null;
+        byte[]? expected = null;
         try
         {
             decoded = DecodeBase64Url(encodedNonce);
-            return CryptographicOperations.FixedTimeEquals(decoded, _options.BootstrapNonceBytes);
+            expected = _options.BootstrapNonceBytes;
+            return CryptographicOperations.FixedTimeEquals(decoded, expected);
         }
-        catch (FormatException)
+        catch (Exception exception) when (exception is FormatException or ObjectDisposedException)
         {
             return false;
         }
@@ -945,6 +1156,12 @@ public sealed class AgentHost : IAsyncDisposable
                 CryptographicOperations.ZeroMemory(decoded);
             }
         }
+    }
+
+    private void InvalidateNonce()
+    {
+        _nonceValid = false;
+        _options.ClearBootstrapNonce();
     }
 
     private bool PeerSidMatches(NamedPipeConnection connection)
@@ -963,7 +1180,7 @@ public sealed class AgentHost : IAsyncDisposable
             {
                 if (_state is AgentHostState.Listening or AgentHostState.Authenticating)
                 {
-                    _nonceValid = false;
+                    InvalidateNonce();
                 }
                 else
                 {
@@ -1055,3 +1272,5 @@ public interface IAgentHostAdapterMetadata
 {
     IReadOnlyList<string> AdapterIds { get; }
 }
+
+internal delegate NamedPipeServer AgentHostListenerFactory(NamedPipeServerOptions options);

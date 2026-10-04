@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\NativeSpy.Client\NativeSpy.Client.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Client.NamedPipes\NativeSpy.Client.NamedPipes.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Agent.Host\NativeSpy.Agent.Host.csproj" />
+    <ProjectReference Include="..\..\src\NativeSpy.Agent.Host.WinForms\NativeSpy.Agent.Host.WinForms.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Protocol.Json\NativeSpy.Protocol.Json.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Transport.NamedPipes\NativeSpy.Transport.NamedPipes.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.FlaUI\NativeSpy.FlaUI.csproj" />

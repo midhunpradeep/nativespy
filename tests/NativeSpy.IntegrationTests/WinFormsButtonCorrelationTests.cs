@@ -21,6 +21,9 @@ public sealed class WinFormsButtonCorrelationTests
         using var flaUi = FlaUiAutomationSession.Attach(target.ProcessId);
         var source = flaUi.FindByAutomationId("NativeSpyTestButton");
         var targetPort = new TestTargetWinFormsPort(target);
+        Assert.Equal(
+            ProtocolOperationNames.ProductionOperations.OrderBy(name => name, StringComparer.Ordinal),
+            target.Session.SupportedOperations.OrderBy(name => name, StringComparer.Ordinal));
         var policy = new CorrelationPolicyDto(
             CorrelationPolicyMode.Conservative,
             maxCandidates: 1,

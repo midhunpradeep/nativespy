@@ -61,8 +61,7 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
     private readonly ulong? _configuredDefaultBudgetMs;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _outstandingSlots;
-    private readonly ConcurrentDictionary<ulong, TaskCompletionSource<ResponseEnvelopeWire>> _pending = new();
-    private readonly ConcurrentDictionary<ulong, byte> _abandoned = new();
+    private readonly ConcurrentDictionary<ulong, PendingRequest> _pending = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Task _readerLoop;
     private Exception? _terminalError;
@@ -230,8 +229,8 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
         }
 
         await _outstandingSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+        PendingRequest? pending = null;
         ulong requestNumber = 0;
-        TaskCompletionSource<ResponseEnvelopeWire>? completion = null;
         var sendGateHeld = false;
         try
         {
@@ -250,13 +249,13 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
             {
                 ThrowIfClosed();
                 requestNumber = checked(++_nextRequestId);
-                completion = new TaskCompletionSource<ResponseEnvelopeWire>(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-                if (!_pending.TryAdd(requestNumber, completion))
+                var candidate = new PendingRequest();
+                if (!_pending.TryAdd(requestNumber, candidate))
                 {
                     throw new InvalidOperationException("The request ID was already pending.");
                 }
 
+                pending = candidate;
                 var request = new RequestEnvelopeWire
                 {
                     ProtocolVersion = ProtocolVersion,
@@ -269,7 +268,6 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
                 var bytes = ProtocolJsonCodec.SerializeRequest(request);
                 if (bytes.Length > _helloResponse.Limits.MaxFrameBytes)
                 {
-                    _pending.TryRemove(requestNumber, out _);
                     throw new NamedPipeProtocolException(
                         new ProtocolErrorDto(ProtocolErrorCode.ResponseTooLarge, "The request exceeded the negotiated frame limit."));
                 }
@@ -280,20 +278,10 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
                 }
                 catch (Exception exception)
                 {
-                    _pending.TryRemove(requestNumber, out _);
                     var terminal = CreateTerminalException(exception);
                     TransitionTerminal(terminal);
                     throw terminal;
                 }
-            }
-            catch
-            {
-                if (requestNumber != 0)
-                {
-                    _pending.TryRemove(requestNumber, out _);
-                }
-
-                throw;
             }
             finally
             {
@@ -304,28 +292,40 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
                 }
             }
 
-            try
+            return await AwaitResponseAsync(
+                    pending,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested
+            && pending is not null)
+        {
+            if (_pending.TryGetValue(requestNumber, out var current)
+                && ReferenceEquals(current, pending)
+                && !pending.Completion.Task.IsCompleted)
             {
-                return await AwaitResponseAsync(
-                        requestNumber,
-                        completion.Task,
-                        effectiveBudget,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                pending.MarkAbandoned();
             }
-            finally
+
+            throw;
+        }
+        catch
+        {
+            if (pending is not null
+                && _pending.TryRemove(requestNumber, out var removed))
             {
-                if (_pending.TryRemove(requestNumber, out _)
-                    && completion is not null
-                    && !completion.Task.IsCompleted)
-                {
-                    _abandoned[requestNumber] = 0;
-                }
+                removed.ReleaseSlot(_outstandingSlots);
             }
+
+            throw;
         }
         finally
         {
-            _outstandingSlots.Release();
+            if (pending is null)
+            {
+                _outstandingSlots.Release();
+            }
         }
     }
 
@@ -398,26 +398,11 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
         // in-flight request continuations have observed the terminal state.
     }
 
-    private async Task<ResponseEnvelopeWire> AwaitResponseAsync(
-        ulong requestNumber,
-        Task<ResponseEnvelopeWire> responseTask,
-        ulong budgetMs,
+    private static async Task<ResponseEnvelopeWire> AwaitResponseAsync(
+        PendingRequest pending,
         CancellationToken cancellationToken)
     {
-        var timeoutTask = Task.Delay(TimeSpan.FromMilliseconds(budgetMs));
-        var winner = await Task.WhenAny(responseTask, timeoutTask).WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (winner == timeoutTask && !responseTask.IsCompleted)
-        {
-            if (_pending.TryRemove(requestNumber, out _))
-            {
-                _abandoned[requestNumber] = 0;
-            }
-
-            throw new NamedPipeOperationException(
-                new OperationErrorDto(OperationErrorCode.TargetTimeout, "The Client wait budget expired."));
-        }
-
-        return await responseTask.ConfigureAwait(false);
+        return await pending.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ReadResponsesAsync()
@@ -452,11 +437,16 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
                         new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation));
                 }
 
-                if (_pending.TryGetValue(requestNumber, out var completion))
+                if (_pending.TryRemove(requestNumber, out var pending))
                 {
-                    completion.TrySetResult(response);
+                    if (!pending.IsAbandoned)
+                    {
+                        pending.Completion.TrySetResult(response);
+                    }
+
+                    pending.ReleaseSlot(_outstandingSlots);
                 }
-                else if (!_abandoned.TryRemove(requestNumber, out _))
+                else
                 {
                     throw new NamedPipeProtocolException(
                         new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation, "The Host returned an unknown request ID."));
@@ -490,10 +480,16 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
         _connection.Abort();
         foreach (var pair in _pending)
         {
-            pair.Value.TrySetException(error);
-        }
+            if (_pending.TryRemove(pair.Key, out var pending))
+            {
+                if (!pending.IsAbandoned)
+                {
+                    pending.Completion.TrySetException(error);
+                }
 
-        _pending.Clear();
+                pending.ReleaseSlot(_outstandingSlots);
+            }
+        }
     }
 
     private void ThrowIfClosed()
@@ -560,12 +556,13 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
             || response.Limits.MaxFrameBytes <= 0
             || response.Limits.MaxFrameBytes > ProtocolWireConstants.DefaultMaximumFrameBytes
             || response.Limits.MaxFrameBytes > maximumFrameBytes
-            || response.Limits.MaxJsonDepth <= 0
-            || response.Limits.MaxJsonDepth > ProtocolWireConstants.DefaultMaximumJsonDepth
+            || response.Limits.MaxJsonDepth != ProtocolWireConstants.DefaultMaximumJsonDepth
             || response.Limits.DefaultBudgetMs == 0
             || response.Limits.MaxBudgetMs < response.Limits.DefaultBudgetMs
             || response.Limits.MaxOutstandingRequests <= 0
-            || response.Limits.MaxOutstandingRequests > 8)
+            || response.Limits.MaxOutstandingRequests > 8
+            || !response.Capabilities.SingleClient
+            || response.Capabilities.ReconnectSupported)
         {
             throw new NamedPipeProtocolException(
                 new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation, "The Host hello response is invalid."));
@@ -677,5 +674,29 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IAsyncDis
                 requestId.ToString(CultureInfo.InvariantCulture),
                 value,
                 StringComparison.Ordinal);
+    }
+
+    private sealed class PendingRequest
+    {
+        private int _abandoned;
+        private int _slotReleased;
+
+        public TaskCompletionSource<ResponseEnvelopeWire> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool IsAbandoned => Volatile.Read(ref _abandoned) != 0;
+
+        public void MarkAbandoned()
+        {
+            Interlocked.Exchange(ref _abandoned, 1);
+        }
+
+        public void ReleaseSlot(SemaphoreSlim slots)
+        {
+            if (Interlocked.Exchange(ref _slotReleased, 1) == 0)
+            {
+                slots.Release();
+            }
+        }
     }
 }

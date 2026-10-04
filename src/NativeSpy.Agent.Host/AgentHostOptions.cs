@@ -22,7 +22,6 @@ public sealed class AgentHostOptions : IDisposable
         ulong defaultBudgetMs = 10_000,
         ulong maxBudgetMs = 60_000,
         int maximumFrameBytes = ProtocolWireConstants.DefaultMaximumFrameBytes,
-        int maximumJsonDepth = ProtocolWireConstants.DefaultMaximumJsonDepth,
         int maximumOutstandingRequests = 8)
     {
         if (string.IsNullOrWhiteSpace(pipeName)
@@ -63,11 +62,6 @@ public sealed class AgentHostOptions : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maximumFrameBytes));
         }
 
-        if (maximumJsonDepth <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumJsonDepth));
-        }
-
         if (maximumOutstandingRequests <= 0 || maximumOutstandingRequests > 8)
         {
             throw new ArgumentOutOfRangeException(
@@ -82,7 +76,6 @@ public sealed class AgentHostOptions : IDisposable
         DefaultBudgetMs = defaultBudgetMs;
         MaxBudgetMs = maxBudgetMs;
         MaximumFrameBytes = maximumFrameBytes;
-        MaximumJsonDepth = maximumJsonDepth;
         MaximumOutstandingRequests = maximumOutstandingRequests;
     }
 
@@ -106,8 +99,6 @@ public sealed class AgentHostOptions : IDisposable
 
     public int MaximumFrameBytes { get; }
 
-    public int MaximumJsonDepth { get; }
-
     public int MaximumOutstandingRequests { get; }
 
     internal byte[] BootstrapNonceBytes
@@ -121,6 +112,15 @@ public sealed class AgentHostOptions : IDisposable
             }
 
             return nonce;
+        }
+    }
+
+    internal void ClearBootstrapNonce()
+    {
+        var nonce = Interlocked.Exchange(ref _bootstrapNonce, null);
+        if (nonce is not null)
+        {
+            CryptographicOperations.ZeroMemory(nonce);
         }
     }
 
@@ -147,11 +147,7 @@ public sealed class AgentHostOptions : IDisposable
 
     public void Dispose()
     {
-        var nonce = Interlocked.Exchange(ref _bootstrapNonce, null);
-        if (nonce is not null)
-        {
-            CryptographicOperations.ZeroMemory(nonce);
-        }
+        ClearBootstrapNonce();
     }
 
     public static AgentHostOptions CreateDefault(

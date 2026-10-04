@@ -178,7 +178,7 @@ public static class ProtocolJsonCodec
         using var document = ParseStrict(utf8, ProtocolWireConstants.DefaultMaximumFrameBytes);
         var root = RequireObject(document.RootElement, "request envelope");
         EnsureOnlyProperties(root, "request envelope", "messageKind", "protocolVersion", "sessionId", "requestId", "operation", "budgetMs", "payload");
-        var payload = RequiredObjectProperty(root, "payload").Clone();
+        var payload = RequiredPayloadProperty(root, "payload").Clone();
         return new RequestEnvelopeWire
         {
             MessageKind = RequiredString(root, "messageKind"),
@@ -484,6 +484,17 @@ public static class ProtocolJsonCodec
         if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Object)
         {
             throw new ProtocolJsonException($"Required object property '{name}' is missing or invalid.");
+        }
+
+        return value;
+    }
+
+    private static JsonElement RequiredPayloadProperty(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value)
+            || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            throw new ProtocolJsonException($"Required payload property '{name}' is missing or null.");
         }
 
         return value;

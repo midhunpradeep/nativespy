@@ -17,6 +17,8 @@ public sealed class WinFormsHostCompositionFactory : IAgentHostCompositionFactor
         _dispatchAnchor = dispatchAnchor ?? throw new ArgumentNullException(nameof(dispatchAnchor));
     }
 
+    public IReadOnlyList<string> DeclaredOperationNames => ProtocolOperationNames.ProductionOperations;
+
     public IAgentHostComposition Create(
         IManagedObjectReferenceService identityService,
         HostSessionContext context)
@@ -78,7 +80,7 @@ internal sealed class BeginCurrentHwndHandler : IAgentOperationHandler
         _dispatcher = dispatcher;
     }
 
-    public string OperationName => WinFormsOperationNames.BeginCurrentHwnd;
+    public string OperationName => ProtocolOperationNames.BeginCurrentHwnd;
 
     public async Task<AgentHandlerResult> HandleAsync(
         AgentRequestContext context,
@@ -108,7 +110,7 @@ internal sealed class RevalidateCurrentHwndHandler : IAgentOperationHandler
         _dispatcher = dispatcher;
     }
 
-    public string OperationName => WinFormsOperationNames.RevalidateCurrentHwnd;
+    public string OperationName => ProtocolOperationNames.RevalidateCurrentHwnd;
 
     public async Task<AgentHandlerResult> HandleAsync(
         AgentRequestContext context,
@@ -123,10 +125,4 @@ internal sealed class RevalidateCurrentHwndHandler : IAgentOperationHandler
             .ConfigureAwait(false);
         return AgentHandlerResult.Success(ProtocolJsonCodec.SerializeFrameworkEvidence(evidence));
     }
-}
-
-public static class WinFormsOperationNames
-{
-    public const string BeginCurrentHwnd = "beginCurrentHwnd";
-    public const string RevalidateCurrentHwnd = "revalidateCurrentHwnd";
 }

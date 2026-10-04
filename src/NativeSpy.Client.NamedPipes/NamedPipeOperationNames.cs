@@ -1,7 +1,9 @@
+using NativeSpy.Protocol.Common;
+
 namespace NativeSpy.Client.NamedPipes;
 
 public static class NamedPipeOperationNames
 {
-    public const string BeginCurrentHwnd = "beginCurrentHwnd";
-    public const string RevalidateCurrentHwnd = "revalidateCurrentHwnd";
+    public const string BeginCurrentHwnd = ProtocolOperationNames.BeginCurrentHwnd;
+    public const string RevalidateCurrentHwnd = ProtocolOperationNames.RevalidateCurrentHwnd;
 }

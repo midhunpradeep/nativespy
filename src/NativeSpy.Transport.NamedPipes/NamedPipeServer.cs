@@ -7,6 +7,8 @@ namespace NativeSpy.Transport.NamedPipes;
 public sealed class NamedPipeServer : IAsyncDisposable
 {
     private readonly NamedPipeServerOptions _options;
+    private readonly object _gate = new();
+    private NamedPipeServerStream? _listener;
     private int _disposed;
 
     public NamedPipeServer(NamedPipeServerOptions options)
@@ -14,12 +16,25 @@ public sealed class NamedPipeServer : IAsyncDisposable
         _options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
+    public string PipeName => _options.PipeName;
+
+    /// <summary>
+    /// Creates the secured listener synchronously. A successful return means the
+    /// explicit pipe ACL has been accepted by the operating system.
+    /// </summary>
+    public void Bind()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            _listener ??= CreateServerStream();
+        }
+    }
+
     public async Task<NamedPipeConnection> AcceptAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
-
-        var stream = CreateServerStream();
+        var stream = TakeOrCreateListener();
         try
         {
             await stream.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -34,50 +49,66 @@ public sealed class NamedPipeServer : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        Interlocked.Exchange(ref _disposed, 1);
+        NamedPipeServerStream? listener;
+        lock (_gate)
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            listener = _listener;
+            _listener = null;
+        }
+
+        listener?.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private NamedPipeServerStream TakeOrCreateListener()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return _listener is not null
+                ? TakeListener()
+                : CreateServerStream();
+        }
+    }
+
+    private NamedPipeServerStream TakeListener()
+    {
+        var listener = _listener;
+        _listener = null;
+        return listener!;
     }
 
     private NamedPipeServerStream CreateServerStream()
     {
         var security = CreatePipeSecurity(_options.AllowedUserSid);
-        try
-        {
-            return NamedPipeServerStreamAcl.Create(
-                _options.PipeName,
-                PipeDirection.InOut,
-                1,
-                PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous,
-                0,
-                0,
-                security,
-                HandleInheritability.None,
-                (PipeAccessRights)0);
-        }
-        catch
-        {
-            throw;
-        }
+        return NamedPipeServerStreamAcl.Create(
+            _options.PipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            0,
+            0,
+            security,
+            HandleInheritability.None,
+            (PipeAccessRights)0);
     }
 
     private static PipeSecurity CreatePipeSecurity(SecurityIdentifier allowedUserSid)
     {
         var security = new PipeSecurity();
-        try
-        {
-            security.SetOwner(allowedUserSid);
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            security.AddAccessRule(new PipeAccessRule(
-                allowedUserSid,
-                PipeAccessRights.ReadWrite | PipeAccessRights.Synchronize,
-                AccessControlType.Allow));
-            return security;
-        }
-        catch
-        {
-            throw;
-        }
+        security.SetOwner(allowedUserSid);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new PipeAccessRule(
+            allowedUserSid,
+            PipeAccessRights.ReadWrite | PipeAccessRights.Synchronize,
+            AccessControlType.Allow));
+        return security;
     }
 
     private void ThrowIfDisposed()

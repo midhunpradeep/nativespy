@@ -33,9 +33,7 @@ internal sealed class WinFormsUiDispatcher : IWinFormsTargetDispatcher
         if (Volatile.Read(ref _disposed) != 0)
         {
             throw new AgentOperationDispatchException(
-                new OperationErrorDto(
-                    OperationErrorCode.ExecutionContextUnavailable,
-                    "The WinForms execution context is closed."));
+                CreateUnavailableError(context, "The WinForms execution context is closed."));
         }
 
         try
@@ -45,13 +43,13 @@ internal sealed class WinFormsUiDispatcher : IWinFormsTargetDispatcher
         catch (OperationCanceledException)
         {
             throw new AgentOperationDispatchException(
-                new OperationErrorDto(
-                    context.IsExpired
-                        ? OperationErrorCode.TargetTimeout
-                        : OperationErrorCode.ExecutionContextUnavailable,
-                    context.IsExpired
-                        ? "The operation budget expired while waiting for the UI callback slot."
-                        : "The WinForms execution context was cancelled."));
+                context.IsExpired
+                    ? new OperationErrorDto(
+                        OperationErrorCode.TargetTimeout,
+                        "The operation budget expired while waiting for the UI callback slot.")
+                    : CreateUnavailableError(
+                        context,
+                        "The WinForms execution context was cancelled."));
         }
 
         try
@@ -73,9 +71,13 @@ internal sealed class WinFormsUiDispatcher : IWinFormsTargetDispatcher
         if (context.IsExpired || cancellationToken.IsCancellationRequested)
         {
             throw new AgentOperationDispatchException(
-                new OperationErrorDto(
-                    OperationErrorCode.TargetTimeout,
-                    "The operation budget expired before UI dispatch."));
+                context.IsExpired
+                    ? new OperationErrorDto(
+                        OperationErrorCode.TargetTimeout,
+                        "The operation budget expired before UI dispatch.")
+                    : CreateUnavailableError(
+                        context,
+                        "The WinForms execution context was cancelled."));
         }
 
         if (!_anchor.IsHandleCreated || _anchor.IsDisposed || _anchor.Disposing)
@@ -109,9 +111,13 @@ internal sealed class WinFormsUiDispatcher : IWinFormsTargetDispatcher
                     || context.IsExpired)
                 {
                     completion.TrySetException(new AgentOperationDispatchException(
-                        new OperationErrorDto(
-                            OperationErrorCode.TargetTimeout,
-                            "The operation budget expired before UI work started.")));
+                        context.IsExpired
+                            ? new OperationErrorDto(
+                                OperationErrorCode.TargetTimeout,
+                                "The operation budget expired before UI work started.")
+                            : CreateUnavailableError(
+                                context,
+                                "The WinForms execution context was cancelled.")));
                     return;
                 }
 
@@ -159,11 +165,28 @@ internal sealed class WinFormsUiDispatcher : IWinFormsTargetDispatcher
         if (context.IsExpired || cancellationToken.IsCancellationRequested)
         {
             throw new AgentOperationDispatchException(
-                new OperationErrorDto(
-                    OperationErrorCode.TargetTimeout,
-                    "The operation budget expired before UI work started."));
+                context.IsExpired
+                    ? new OperationErrorDto(
+                        OperationErrorCode.TargetTimeout,
+                        "The operation budget expired before UI work started.")
+                    : CreateUnavailableError(
+                        context,
+                        "The WinForms execution context was cancelled."));
         }
 
         return callback();
+    }
+
+    private static OperationErrorDto CreateUnavailableError(
+        AgentRequestContext context,
+        string message)
+    {
+        return new OperationErrorDto(
+            context.IsExpired
+                ? OperationErrorCode.TargetTimeout
+                : OperationErrorCode.ExecutionContextUnavailable,
+            context.IsExpired
+                ? "The operation budget expired before UI work started."
+                : message);
     }
 }

@@ -3,6 +3,7 @@ using System.Text;
 using NativeSpy.Client.NamedPipes;
 using NativeSpy.Protocol.Common;
 using NativeSpy.Protocol.Json;
+using NativeSpy.Transport.NamedPipes;
 
 namespace NativeSpy.IntegrationTests;
 
@@ -11,17 +12,20 @@ internal sealed class TestTargetProcess : IDisposable
     private const int ReadTimeoutMilliseconds = 10_000;
 
     private readonly Process _process;
+    private readonly ProcessIdentityDto _processIdentity;
     private readonly Task<string> _stderrDrain;
     private readonly NamedPipeClientSession _session;
     private bool _disposed;
 
     private TestTargetProcess(
         Process process,
+        ProcessIdentityDto processIdentity,
         BootstrapDescriptorWire bootstrap,
         NamedPipeClientSession session,
         Task<string> stderrDrain)
     {
         _process = process;
+        _processIdentity = processIdentity;
         Bootstrap = bootstrap;
         _session = session;
         _stderrDrain = stderrDrain;
@@ -29,11 +33,9 @@ internal sealed class TestTargetProcess : IDisposable
 
     public BootstrapDescriptorWire Bootstrap { get; }
 
-    public ProcessIdentityDto ProcessIdentity => new(
-        Bootstrap.TargetProcessIdentity.ProcessId,
-        Bootstrap.TargetProcessIdentity.ProcessStartIdentity);
+    public ProcessIdentityDto ProcessIdentity => _processIdentity;
 
-    public int ProcessId => Bootstrap.TargetProcessIdentity.ProcessId;
+    public int ProcessId => _processIdentity.ProcessId;
 
     public NamedPipeClientSession Session => _session;
 
@@ -73,16 +75,24 @@ internal sealed class TestTargetProcess : IDisposable
             var bootstrap = ProtocolJsonCodec.DeserializeBootstrap(
                 Encoding.UTF8.GetBytes(bootstrapJson));
             bootstrap.EnsureMessageKind();
-            var expectedIdentity = new ProcessIdentityDto(
-                bootstrap.TargetProcessIdentity.ProcessId,
-                bootstrap.TargetProcessIdentity.ProcessStartIdentity);
+            var expectedIdentity = ProcessIdentityReader.ReadForProcessId(process.Id);
+            if (bootstrap.TargetProcessIdentity.ProcessId != expectedIdentity.ProcessId
+                || !string.Equals(
+                    bootstrap.TargetProcessIdentity.ProcessStartIdentity,
+                    expectedIdentity.ProcessStartIdentity,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The bootstrap descriptor did not identify the independently observed target process.");
+            }
+
             session = NamedPipeClientSession.ConnectAsync(
                     bootstrap,
                     expectedIdentity,
                     cancellationToken: CancellationToken.None)
                 .GetAwaiter()
                 .GetResult();
-            return new TestTargetProcess(process, bootstrap, session, stderrDrain);
+            return new TestTargetProcess(process, expectedIdentity, bootstrap, session, stderrDrain);
         }
         catch
         {
@@ -133,14 +143,56 @@ internal sealed class TestTargetProcess : IDisposable
 
     private static string ReadLine(Process process, int timeoutMilliseconds)
     {
-        var readTask = process.StandardOutput.ReadLineAsync();
-        if (!readTask.Wait(timeoutMilliseconds))
+        using var timeout = new CancellationTokenSource(timeoutMilliseconds);
+        try
+        {
+            return ReadBoundedLineAsync(
+                    process.StandardOutput,
+                    ProtocolWireConstants.MaximumBootstrapBytes,
+                    timeout.Token)
+                .GetAwaiter()
+                .GetResult()
+                ?? throw new InvalidOperationException(
+                    "The WinForms test target closed stdout before publishing bootstrap.");
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
             throw new TimeoutException("The WinForms test target did not publish its bootstrap descriptor.");
         }
+    }
 
-        return readTask.GetAwaiter().GetResult()
-            ?? throw new InvalidOperationException("The WinForms test target closed stdout before publishing bootstrap.");
+    private static async Task<string?> ReadBoundedLineAsync(
+        StreamReader reader,
+        int maximumCharacters,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new StringBuilder();
+        var character = new char[1];
+        while (true)
+        {
+            var count = await reader.ReadAsync(character.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (count == 0)
+            {
+                return buffer.Length == 0 ? null : buffer.ToString();
+            }
+
+            if (character[0] == '\n')
+            {
+                return buffer.ToString();
+            }
+
+            if (character[0] == '\r')
+            {
+                continue;
+            }
+
+            if (buffer.Length >= maximumCharacters)
+            {
+                throw new InvalidDataException("The bootstrap descriptor exceeded its bound.");
+            }
+
+            buffer.Append(character[0]);
+        }
     }
 
     private static void TryKill(Process process)
