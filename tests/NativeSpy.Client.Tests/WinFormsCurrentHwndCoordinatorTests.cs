@@ -37,8 +37,8 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Complete_current_hwnd_facts_are_exact_and_same_managed_element()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: true, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
         var target = new FakeTargetPort(CreateInitialTarget(1234));
         target.Revalidated = CreateRevalidatedTarget(1234, referenceEqual: true, current: true, live: true);
 
@@ -63,8 +63,8 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Unrelated_diagnostic_validation_failure_does_not_block_exact()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: true, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
         var target = new FakeTargetPort(CreateInitialTarget(
             1234,
             CreateTarget(),
@@ -91,7 +91,6 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
         external.EqualityEvidence.Enqueue(CreateEquality(
             123,
-            revalidated: false,
             comparePassed: true,
             sourceAvailable: ProofOutcome.Failed));
         var target = new FakeTargetPort(CreateInitialTarget(1234));
@@ -107,10 +106,9 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Required_revalidated_external_source_currentness_failure_blocks_exact()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
         external.EqualityEvidence.Enqueue(CreateEquality(
             123,
-            revalidated: true,
             comparePassed: true,
             sourceAvailable: ProofOutcome.Failed));
         var target = new FakeTargetPort(CreateInitialTarget(1234));
@@ -127,7 +125,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Initial_compare_elements_false_keeps_candidate_but_short_circuits_revalidation()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: false));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: false));
         var target = new FakeTargetPort(CreateInitialTarget(1234));
         target.Revalidated = CreateRevalidatedTarget(1234, referenceEqual: true, current: true, live: true);
 
@@ -173,7 +171,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Missing_target_candidate_is_unresolved_without_target_revalidation()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
         var target = new FakeTargetPort(CreateInitialTarget(1234, candidate: null));
 
         var result = await Resolve(external, target);
@@ -188,8 +186,8 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Target_revalidation_change_is_unresolved_without_external_revalidation()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: true, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
         var target = new FakeTargetPort(CreateInitialTarget(1234));
         target.Revalidated = CreateRevalidatedTarget(1234, referenceEqual: false, current: false, live: false);
 
@@ -205,8 +203,8 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
     public async Task Revalidated_external_compare_failure_is_unresolved()
     {
         var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: false, comparePassed: true));
-        external.EqualityEvidence.Enqueue(CreateEquality(123, revalidated: true, comparePassed: false));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: false));
         var target = new FakeTargetPort(CreateInitialTarget(1234));
         target.Revalidated = CreateRevalidatedTarget(1234, referenceEqual: true, current: true, live: true);
 
@@ -216,6 +214,30 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
         Assert.Single(result.Candidates);
         Assert.Null(result.PrimaryCandidateId);
         Assert.Equal(2, external.EqualityEvidenceConsumed.Count);
+    }
+
+    [Fact]
+    public async Task Target_acquisition_failure_short_circuits_external_revalidation_and_reports_agent_effect()
+    {
+        var external = new FakeExternalPort(CreateExternalEvidence(1234, 123));
+        external.EqualityEvidence.Enqueue(CreateEquality(123, comparePassed: true));
+        var target = new FakeTargetPort(CreateInitialTarget(1234));
+        var error = new OperationErrorDto(OperationErrorCode.StaleHandle, "The handle generation is stale.");
+        var acquisitionFailure = CreateAcquisitionFailureTarget(1234, error);
+        target.Revalidated = acquisitionFailure;
+
+        var result = await Resolve(external, target);
+
+        Assert.Equal(CorrelationStatus.Unresolved, result.Status);
+        Assert.NotNull(result.OperationError);
+        Assert.Equal(OperationErrorCode.StaleHandle, result.OperationError!.Code);
+        Assert.Single(external.EqualityEvidenceConsumed);
+        Assert.Equal(1, target.RevalidationCalls);
+        Assert.Contains("NativeSpy.Agent.TryAcquire", result.Effects.Operations);
+        Assert.DoesNotContain("WinForms.Control.FromHandle.Revalidate", result.Effects.Operations);
+        Assert.DoesNotContain(
+            acquisitionFailure.EvidenceFacts,
+            fact => fact.Name is "ControlFromHandle" or "CurrentHwndMatches" or "ControlLive");
     }
 
     [Fact]
@@ -271,7 +293,6 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
 
     private static ExternalUiaEqualityEvidenceDto CreateEquality(
         ulong hwnd,
-        bool revalidated,
         bool comparePassed,
         ProofOutcome sourceAvailable = ProofOutcome.Passed)
     {
@@ -347,6 +368,29 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
             Array.Empty<CorrelationLimitationDto>());
     }
 
+    private static FrameworkCorrelationEvidenceDto CreateAcquisitionFailureTarget(
+        int processId,
+        OperationErrorDto operationError)
+    {
+        return new FrameworkCorrelationEvidenceDto(
+            "winforms",
+            processId,
+            candidateTarget: null,
+            new[]
+            {
+                Fact("CandidateResolved", ProofOutcome.NotAvailable),
+                Fact("ControlFromHandleReferenceEqual", ProofOutcome.NotAvailable)
+            },
+            new[]
+            {
+                Validation("CandidateResolved", ValidationOutcome.Changed)
+            },
+            PassiveEffects(new[] { "NativeSpy.Agent.TryAcquire" }),
+            Array.Empty<AdapterMetadataDto>(),
+            Array.Empty<CorrelationLimitationDto>(),
+            operationError);
+    }
+
     private static CorrelationTargetRefDto CreateTarget()
     {
         var handle = new HandleRefDto("session", "button", 1, HandleKind.ClrObject, "target");
@@ -363,7 +407,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
             managed: new ManagedObjectRefDto(handle, type, "target"));
     }
 
-    private static CorrelationEffectSummaryDto PassiveEffects()
+    private static CorrelationEffectSummaryDto PassiveEffects(IEnumerable<string>? operations = null)
     {
         return new CorrelationEffectSummaryDto(
             new[] { EffectCategory.Passive },
@@ -371,7 +415,7 @@ public sealed class WinFormsCurrentHwndCoordinatorTests
             ApplicationCallbackEffect.None,
             Array.Empty<CallbackDetailDto>(),
             VisibleMutationEffect.NotRequested,
-            Array.Empty<string>());
+            operations ?? Array.Empty<string>());
     }
 
     private static CorrelationEvidenceFactDto Fact(

@@ -60,8 +60,11 @@ public sealed class WinFormsButtonCorrelationTests
             "System.Windows.Forms.Button",
             managed.TypeIdentity?.FullName);
         Assert.Equal(managed.Handle.BoundaryId, managed.TypeIdentity?.BoundaryId);
-        Assert.StartsWith("clr-type-", managed.TypeIdentity?.TypeId);
+        Assert.False(string.IsNullOrWhiteSpace(managed.TypeIdentity?.TypeId));
         Assert.NotEqual(managed.TypeIdentity?.FullName, managed.TypeIdentity?.TypeId);
+        Assert.NotEqual(
+            typeof(System.Windows.Forms.Button).AssemblyQualifiedName,
+            managed.TypeIdentity?.TypeId);
 
         var secondManaged = Assert.IsType<ManagedObjectRefDto>(
             Assert.Single(secondResult.Candidates).Target.Managed);

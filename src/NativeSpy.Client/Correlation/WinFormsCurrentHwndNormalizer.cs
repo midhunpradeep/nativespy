@@ -413,11 +413,6 @@ internal sealed class WinFormsCurrentHwndNormalizer
             operations.Add("FlaUI.CompareElements.Revalidate");
         }
 
-        operations.Add("WinForms.Control.FromHandle");
-        if (revalidatedTargetEvidence is not null)
-        {
-            operations.Add("WinForms.Control.FromHandle.Revalidate");
-        }
         var frameworkState = FrameworkStateEffect.None;
         var callbacks = ApplicationCallbackEffect.None;
         var mutation = VisibleMutationEffect.NotRequested;

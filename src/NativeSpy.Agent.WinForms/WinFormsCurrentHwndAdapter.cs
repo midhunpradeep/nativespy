@@ -32,11 +32,13 @@ public sealed class WinFormsCurrentHwndAdapter
                 var registration = _identityService.Register(control);
                 if (!registration.IsSuccess)
                 {
-                    return CreateFailureEvidence(
+                    return CreateRegistrationFailureEvidence(
                         hwnd,
                         registration.Error ?? throw new InvalidOperationException(
                             "The identity service returned an invalid registration result."),
-                        "WinForms.Control.FromHandle");
+                        control,
+                        current,
+                        live);
                 }
 
                 candidateTarget = new CorrelationTargetRefDto(
@@ -131,7 +133,8 @@ public sealed class WinFormsCurrentHwndAdapter
         IEnumerable<CorrelationValidationFactDto> validationFacts,
         Control? control,
         string operationName,
-        OperationErrorDto? operationError = null)
+        OperationErrorDto? operationError = null,
+        IEnumerable<CorrelationLimitationDto>? limitations = null)
     {
         return new FrameworkCorrelationEvidenceDto(
             "winforms",
@@ -147,7 +150,7 @@ public sealed class WinFormsCurrentHwndAdapter
                 VisibleMutationEffect.NotRequested,
                 new[] { operationName }),
             new[] { CreateMetadata(hwnd, control) },
-            Array.Empty<CorrelationLimitationDto>(),
+            limitations ?? Array.Empty<CorrelationLimitationDto>(),
             operationError);
     }
 
@@ -160,6 +163,39 @@ public sealed class WinFormsCurrentHwndAdapter
             hwnd,
             new OperationErrorDto(OperationErrorCode.TargetOperationFailed, exception.Message),
             operationName);
+    }
+
+    private FrameworkCorrelationEvidenceDto CreateRegistrationFailureEvidence(
+        ulong hwnd,
+        OperationErrorDto operationError,
+        Control control,
+        bool current,
+        bool live)
+    {
+        return CreateEvidence(
+            hwnd,
+            candidateTarget: null,
+            new[]
+            {
+                Evidence("ControlFromHandle", ProofOutcome.Passed),
+                Evidence("CurrentHwndMatches", current ? ProofOutcome.Passed : ProofOutcome.Failed),
+                Evidence("ControlLive", live ? ProofOutcome.Passed : ProofOutcome.Failed)
+            },
+            new[]
+            {
+                Validation("CurrentHwndMatches", current ? ValidationOutcome.Passed : ValidationOutcome.Failed),
+                Validation("ControlLive", live ? ValidationOutcome.Passed : ValidationOutcome.Failed),
+                Validation("CandidateResolved", ValidationOutcome.NotAvailable, operationError.Message)
+            },
+            control,
+            operationName: "WinForms.Control.FromHandle",
+            operationError: operationError,
+            limitations: new[]
+            {
+                new CorrelationLimitationDto(
+                    "AgentIdentityOperationFailed",
+                    operationError.Message)
+            });
     }
 
     private FrameworkCorrelationEvidenceDto CreateFailureEvidence(

@@ -274,10 +274,43 @@ public sealed class ClrAgentSessionTests
     }
 
     [Fact]
+    public async Task Concurrent_registration_of_distinct_targets_allocates_distinct_identities()
+    {
+        using var session = new ClrAgentSession();
+        var targets = Enumerable.Range(0, 64)
+            .Select(_ => new EqualValue(1))
+            .ToArray();
+
+        var results = await Task.WhenAll(
+            targets.Select(target => Task.Run(() => session.Register(target))));
+
+        var references = results.Select(AssertRegistration).ToArray();
+        Assert.All(references, reference => Assert.Equal(session.SessionId, reference.Handle.SessionId));
+        Assert.Equal(
+            targets.Length,
+            references.Select(reference => reference.Handle.HandleId)
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+        Assert.Equal(
+            targets.Length,
+            references.Select(reference => reference.Handle.Generation)
+                .Distinct()
+                .Count());
+        Assert.Single(
+            references.Select(reference => reference.TypeIdentity!.TypeId)
+                .Distinct(StringComparer.Ordinal));
+        Assert.Single(
+            references.Select(reference => reference.Handle.BoundaryId)
+                .Distinct(StringComparer.Ordinal));
+        GC.KeepAlive(targets);
+    }
+
+    [Fact]
     public async Task Concurrent_acquisition_and_close_has_only_documented_outcomes()
     {
         using var session = new ClrAgentSession();
-        var reference = AssertRegistration(session.Register(new EqualValue(1)));
+        var target = new EqualValue(1);
+        var reference = AssertRegistration(session.Register(target));
         var closeTask = Task.Run(session.Close);
         var acquisitionTasks = Enumerable.Range(0, 64)
             .Select(_ => Task.Run(() => session.TryAcquire(reference.Handle)))
@@ -297,6 +330,7 @@ public sealed class ClrAgentSessionTests
         }
 
         Assert.Equal(AgentSessionState.Closed, session.State);
+        GC.KeepAlive(target);
     }
 
     [Fact]

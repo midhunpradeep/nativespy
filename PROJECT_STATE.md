@@ -20,7 +20,7 @@
 - operation-local strong `ManagedObjectAcquisition` with deterministic lifecycle results;
 - actual `AssemblyLoadContext`-based session-local runtime boundaries;
 - weak Type identity cache and production session-local TypeIds;
-- synchronous WinForms adapter composed with `IManagedObjectReferenceService`;
+- synchronous WinForms adapter composed with `IManagedObjectReferenceService`, including truthful registration and acquisition failure evidence;
 - x64 synthetic WinForms target hosting one production Agent session;
 - test-only bounded JSON Lines bridge using production Agent acquisition for `readText`;
 - repeated-correlation assertion proving stable CLR handle identity and fresh UIA CaptureIds;
@@ -49,7 +49,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 103 passing, 0 skipped in the verified environment (25 Protocol, 14 Agent, 63 Client, 1 integration).
+- Tests: 107 passing, 0 skipped in the verified environment (25 Protocol, 15 Agent, 64 Client, 2 Agent.WinForms, 1 integration).
 
 ## Known limitations
 

@@ -158,10 +158,11 @@ The synthetic target creates exactly one `ClrAgentSession` and passes the same i
 - TypeId and boundary behavior;
 - equivalent types in distinct collectible ALCs;
 - concurrent registration/acquisition;
+- concurrent distinct-target registration with stable TypeId and BoundaryId behavior;
 - acquisition/close and registration/close races;
 - result factory invariants.
 
-The integration test additionally proves:
+The focused WinForms adapter tests additionally prove truthful registration failure evidence and acquisition-failure short-circuiting. The integration test additionally proves:
 
 ```text
 same live Button → identical SessionId/HandleId/Generation/Kind/BoundaryId
