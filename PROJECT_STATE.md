@@ -25,11 +25,11 @@
 - strict bounded JSON wire codec with handshake, version negotiation, capabilities, limits, duplicate-property rejection, and separate protocol/operation error branches;
 - same-account Named Pipes transport with eager explicit SID ACL binding, pooled 4-byte big-endian framing, serialized writes, bounded frame/depth parsing, and process-instance identity helpers;
 - single-client Host lifecycle and authentication using nonce plus exact PID/creation identity, fixed protocol operation declarations, and canonical/reserved-name validation;
-- monotonic Host-owned request budgets, bounded eight-request concurrency, one UI callback, logical response commitment before physical delivery, and terminal session ownership;
+- monotonic Host-owned request budgets, bounded eight-request concurrency, one UI callback, logical response commitment before physical delivery, terminal session ownership, and non-blocking shutdown observation of late work;
 - Named Pipe Client session with negotiated fixed limits, canonical increasing request IDs, bounded pending/abandoned request state, late-response slot release, and TargetExited/SessionClosed mapping;
 - bootstrap-only stdout target and production integration port using Named Pipes;
 - repeated-correlation assertion proving stable CLR handle identity and fresh UIA CaptureIds;
-- Protocol, JSON codec, transport, Host/Client session, authentication/request adversarial, Agent lifetime/concurrency, and live integration tests;
+- Protocol, JSON codec, transport, Host/Client session, authentication/request adversarial, late WinForms shutdown, Agent lifetime/concurrency, and live integration tests;
 - deterministic MSBuild artifact handoff from the target project's actual output directory.
 
 ## Not implemented / deferred
@@ -52,7 +52,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 154 passing, 0 skipped in the verified environment (43 Protocol, 15 Agent, 64 Client, 2 Agent.WinForms, 30 integration).
+- Tests: 161 passing, 0 skipped in the verified environment (43 Protocol, 15 Agent, 64 Client, 2 Agent.WinForms, 37 integration).
 
 ## Known limitations
 
@@ -63,6 +63,7 @@
 - FlaUI and WinForms live objects remain isolated to their respective projects; Client sees detached facts only.
 - The live integration test requires Windows, x64, modern .NET WinForms, and an interactive desktop/UIA environment.
 - I3 fixes JSON depth at 64 and does not negotiate or expose a per-session depth override.
+- Late target work remains counted during an active session, but terminal Host shutdown does not wait indefinitely for it. Queued WinForms work that never starts settles as unavailable; already-running target work is never forcibly aborted.
 
 ## Architecture invariants
 

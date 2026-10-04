@@ -19,6 +19,7 @@ public sealed class AgentHost : IAsyncDisposable
     private readonly string[] _declaredOperationNames;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<ulong, Task> _inflight = new();
+    private readonly ConcurrentDictionary<ulong, Task> _lateWork = new();
     private readonly TaskCompletionSource<object?> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private AgentHostState _state = AgentHostState.Created;
     private NamedPipeServer? _server;
@@ -189,19 +190,8 @@ public sealed class AgentHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);
-        var inflight = _inflight.Values.ToArray();
-        if (inflight.Length > 0)
-        {
-            try
-            {
-                await Task.WhenAll(inflight).ConfigureAwait(false);
-            }
-            catch
-            {
-                // The terminal Host state is already published.
-            }
-        }
-
+        // Request and late-preparation tasks observe themselves through detached
+        // continuations; terminal disposal never joins arbitrary target work.
         _shutdown.Dispose();
         _closed.TrySetCanceled();
     }
@@ -568,7 +558,8 @@ public sealed class AgentHost : IAsyncDisposable
                         await SendProtocolErrorAsync(
                                 connection,
                                 malformedRequestId,
-                                ProtocolErrorCode.InvalidRequest)
+                                ProtocolErrorCode.InvalidRequest,
+                                cancellationToken)
                             .ConfigureAwait(false);
                         slots.Release();
                         continue;
@@ -592,7 +583,8 @@ public sealed class AgentHost : IAsyncDisposable
                     await SendProtocolErrorAndStopAsync(
                             connection,
                             request.RequestId,
-                            ProtocolErrorCode.ProtocolViolation)
+                            ProtocolErrorCode.ProtocolViolation,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     return;
                 }
@@ -605,7 +597,8 @@ public sealed class AgentHost : IAsyncDisposable
                     await SendProtocolErrorAndStopAsync(
                             connection,
                             request.RequestId,
-                            ProtocolErrorCode.ProtocolViolation)
+                            ProtocolErrorCode.ProtocolViolation,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     return;
                 }
@@ -616,7 +609,8 @@ public sealed class AgentHost : IAsyncDisposable
                     await SendProtocolErrorAsync(
                             connection,
                             request.RequestId,
-                            ProtocolErrorCode.InvalidRequest)
+                            ProtocolErrorCode.InvalidRequest,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     slots.Release();
                     continue;
@@ -628,7 +622,8 @@ public sealed class AgentHost : IAsyncDisposable
                     await SendProtocolErrorAsync(
                             connection,
                             request.RequestId,
-                            ProtocolErrorCode.UnsupportedOperation)
+                            ProtocolErrorCode.UnsupportedOperation,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     slots.Release();
                     continue;
@@ -641,10 +636,11 @@ public sealed class AgentHost : IAsyncDisposable
                     requestNumber,
                     budget,
                     handler,
-                    slots);
+                    slots,
+                    cancellationToken);
                 _inflight[requestNumber] = task;
                 _ = task.ContinueWith(
-                    _ => RemoveInflight(requestNumber),
+                    completed => ObserveInflightCompletion(_inflight, requestNumber, completed),
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
@@ -682,9 +678,14 @@ public sealed class AgentHost : IAsyncDisposable
         ulong requestNumber,
         ulong budgetMs,
         IAgentOperationHandler handler,
-        SemaphoreSlim slots)
+        SemaphoreSlim slots,
+        CancellationToken hostShutdownToken)
     {
-        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var responseContext = new ResponseContext(
+            _selectedProtocolVersion,
+            SessionId!,
+            _options.MaximumFrameBytes);
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(hostShutdownToken);
         using var timeoutCancellation = new CancellationTokenSource();
         var context = new AgentRequestContext(
             requestNumber,
@@ -695,7 +696,11 @@ public sealed class AgentHost : IAsyncDisposable
         var handlerTask = Task.Run(
             () => handler.HandleAsync(context, request.Payload, requestCancellation.Token),
             CancellationToken.None);
-        var preparationTask = PrepareResponseAsync(handlerTask, request);
+        var preparationTask = PrepareResponseAsync(
+            handlerTask,
+            request,
+            responseContext,
+            hostShutdownToken);
         var timeoutTask = Task.Delay(context.Remaining, timeoutCancellation.Token);
         var responseState = new ResponseCommitState();
         var slotReleasedByLateObserver = false;
@@ -707,12 +712,18 @@ public sealed class AgentHost : IAsyncDisposable
             {
                 requestCancellation.Cancel();
                 slotReleasedByLateObserver = true;
+                _lateWork[requestNumber] = preparationTask;
+                _ = ObserveLatePreparationAsync(_lateWork, requestNumber, preparationTask, slots);
                 if (responseState.TryCommit())
                 {
-                    await CommitTimeoutResponseAsync(connection, request.RequestId).ConfigureAwait(false);
+                    await CommitTimeoutResponseAsync(
+                            connection,
+                            request.RequestId,
+                            responseContext,
+                            hostShutdownToken)
+                        .ConfigureAwait(false);
                 }
 
-                _ = ObserveLatePreparationAsync(preparationTask, slots);
                 return;
             }
 
@@ -727,7 +738,12 @@ public sealed class AgentHost : IAsyncDisposable
                 requestCancellation.Cancel();
                 if (responseState.TryCommit())
                 {
-                    await CommitTimeoutResponseAsync(connection, request.RequestId).ConfigureAwait(false);
+                    await CommitTimeoutResponseAsync(
+                            connection,
+                            request.RequestId,
+                            responseContext,
+                            hostShutdownToken)
+                        .ConfigureAwait(false);
                 }
 
                 return;
@@ -744,7 +760,12 @@ public sealed class AgentHost : IAsyncDisposable
                 return;
             }
 
-            await CommitBytesAsync(connection, prepared.Bytes).ConfigureAwait(false);
+            await CommitBytesAsync(
+                    connection,
+                    prepared.Bytes,
+                    responseContext.MaximumFrameBytes,
+                    hostShutdownToken)
+                .ConfigureAwait(false);
             if (prepared.TerminateSession)
             {
                 await StopAsync().ConfigureAwait(false);
@@ -760,51 +781,56 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
-    private async Task<PreparedResponse> PrepareResponseAsync(
+    private static async Task<PreparedResponse> PrepareResponseAsync(
         Task<AgentHandlerResult> handlerTask,
-        RequestEnvelopeWire request)
+        RequestEnvelopeWire request,
+        ResponseContext responseContext,
+        CancellationToken hostShutdownToken)
     {
         AgentHandlerResult result;
         try
         {
             result = await handlerTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        catch (OperationCanceledException) when (hostShutdownToken.IsCancellationRequested)
         {
             return PreparedResponse.None;
         }
         catch (AgentOperationDispatchException exception)
         {
             return SerializePreparedResponse(
-                CreateOperationErrorResponse(request.RequestId, exception.Error),
-                terminateSession: false);
+                CreateOperationErrorResponse(request.RequestId, exception.Error, responseContext),
+                terminateSession: false,
+                maximumFrameBytes: responseContext.MaximumFrameBytes);
         }
         catch (ProtocolJsonException exception)
         {
             WriteDiagnostic("The operation payload was invalid.", exception);
             return SerializePreparedResponse(
-                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InvalidRequest),
-                terminateSession: false);
+                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InvalidRequest, responseContext),
+                terminateSession: false,
+                maximumFrameBytes: responseContext.MaximumFrameBytes);
         }
         catch (Exception exception)
         {
             WriteDiagnostic("An operation handler failed unexpectedly.", exception);
             return SerializePreparedResponse(
-                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InternalFailure),
-                terminateSession: true);
+                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InternalFailure, responseContext),
+                terminateSession: true,
+                maximumFrameBytes: responseContext.MaximumFrameBytes);
         }
 
         ResponseEnvelopeWire response;
         if (result.OperationError is not null)
         {
-            response = CreateOperationErrorResponse(request.RequestId, result.OperationError);
+            response = CreateOperationErrorResponse(request.RequestId, result.OperationError, responseContext);
         }
         else if (result.Payload is JsonElement payload)
         {
             response = new ResponseEnvelopeWire
             {
-                ProtocolVersion = _selectedProtocolVersion,
-                SessionId = SessionId!,
+                ProtocolVersion = responseContext.ProtocolVersion,
+                SessionId = responseContext.SessionId,
                 RequestId = request.RequestId,
                 ResultStatus = ProtocolJsonCodec.SuccessStatus,
                 Payload = payload.Clone()
@@ -813,39 +839,58 @@ public sealed class AgentHost : IAsyncDisposable
         else
         {
             return SerializePreparedResponse(
-                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InternalFailure),
-                terminateSession: true);
+                CreateProtocolErrorResponse(request.RequestId, ProtocolErrorCode.InternalFailure, responseContext),
+                terminateSession: true,
+                maximumFrameBytes: responseContext.MaximumFrameBytes);
         }
 
-        return SerializePreparedResponse(response, terminateSession: false);
+        return SerializePreparedResponse(
+            response,
+            terminateSession: false,
+            maximumFrameBytes: responseContext.MaximumFrameBytes);
     }
 
-    private PreparedResponse SerializePreparedResponse(
+    private static PreparedResponse SerializePreparedResponse(
         ResponseEnvelopeWire response,
-        bool terminateSession)
+        bool terminateSession,
+        int maximumFrameBytes)
     {
         var bytes = TrySerializeResponse(response);
         if (bytes is null)
         {
             WriteDiagnostic("The Host response could not be serialized.");
             bytes = TrySerializeResponse(
-                CreateProtocolErrorResponse(response.RequestId, ProtocolErrorCode.InternalFailure));
+                CreateProtocolErrorResponse(
+                    response.RequestId,
+                    ProtocolErrorCode.InternalFailure,
+                    new ResponseContext(
+                        response.ProtocolVersion,
+                        response.SessionId,
+                        maximumFrameBytes)));
             terminateSession = true;
         }
 
-        if (bytes is not null && bytes.Length > _options.MaximumFrameBytes)
+        if (bytes is not null && bytes.Length > maximumFrameBytes)
         {
             bytes = TrySerializeResponse(
-                CreateProtocolErrorResponse(response.RequestId, ProtocolErrorCode.ResponseTooLarge));
+                CreateProtocolErrorResponse(
+                    response.RequestId,
+                    ProtocolErrorCode.ResponseTooLarge,
+                    new ResponseContext(
+                        response.ProtocolVersion,
+                        response.SessionId,
+                        maximumFrameBytes)));
             terminateSession = false;
         }
 
-        return bytes is null || bytes.Length > _options.MaximumFrameBytes
+        return bytes is null || bytes.Length > maximumFrameBytes
             ? PreparedResponse.TerminalWithoutResponse
             : new PreparedResponse(bytes, terminateSession);
     }
 
-    private async Task ObserveLatePreparationAsync(
+    private static async Task ObserveLatePreparationAsync(
+        ConcurrentDictionary<ulong, Task> lateWork,
+        ulong requestNumber,
         Task<PreparedResponse> preparationTask,
         SemaphoreSlim slots)
     {
@@ -859,9 +904,15 @@ public sealed class AgentHost : IAsyncDisposable
         }
         finally
         {
+            lateWork.TryRemove(requestNumber, out var ignored);
             slots.Release();
         }
     }
+
+    private readonly record struct ResponseContext(
+        int ProtocolVersion,
+        string SessionId,
+        int MaximumFrameBytes);
 
     private sealed class PreparedResponse
     {
@@ -896,35 +947,59 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
-    private void RemoveInflight(ulong requestNumber)
+    private static void ObserveInflightCompletion(
+        ConcurrentDictionary<ulong, Task> inflight,
+        ulong requestNumber,
+        Task completed)
     {
-        _inflight.TryRemove(requestNumber, out var ignored);
+        try
+        {
+            if (completed.IsFaulted && completed.Exception is not null)
+            {
+                WriteDiagnostic(
+                    "An Agent Host request execution failed after dispatch.",
+                    completed.Exception.GetBaseException());
+            }
+        }
+        finally
+        {
+            inflight.TryRemove(requestNumber, out var ignored);
+        }
     }
 
     private async Task SendProtocolErrorAsync(
         NamedPipeConnection connection,
         string requestId,
-        ProtocolErrorCode code)
+        ProtocolErrorCode code,
+        CancellationToken hostShutdownToken)
     {
-        var response = new ResponseEnvelopeWire
-        {
-            ProtocolVersion = _selectedProtocolVersion,
-            SessionId = SessionId!,
-            RequestId = requestId,
-            ResultStatus = ProtocolJsonCodec.ProtocolErrorStatus,
-            ProtocolError = new ProtocolErrorWire { Code = Enum.GetName(typeof(ProtocolErrorCode), code)! }
-        };
-        await SendCommittedResponseAsync(connection, response).ConfigureAwait(false);
+        var responseContext = new ResponseContext(
+            _selectedProtocolVersion,
+            SessionId!,
+            _options.MaximumFrameBytes);
+        var response = CreateProtocolErrorResponse(requestId, code, responseContext);
+        await SendCommittedResponseAsync(
+                connection,
+                response,
+                responseContext,
+                hostShutdownToken)
+            .ConfigureAwait(false);
     }
 
     private async Task SendProtocolErrorAndStopAsync(
         NamedPipeConnection connection,
         string requestId,
-        ProtocolErrorCode code)
+        ProtocolErrorCode code,
+        CancellationToken hostShutdownToken)
     {
         try
         {
-            await SendProtocolErrorAsync(connection, requestId, code).ConfigureAwait(false);
+            await SendProtocolErrorAsync(
+                    connection,
+                    requestId,
+                    code,
+                    hostShutdownToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -934,43 +1009,64 @@ public sealed class AgentHost : IAsyncDisposable
 
     private async Task CommitTimeoutResponseAsync(
         NamedPipeConnection connection,
-        string requestId)
+        string requestId,
+        ResponseContext responseContext,
+        CancellationToken hostShutdownToken)
     {
         var prepared = SerializePreparedResponse(
             CreateOperationErrorResponse(
                 requestId,
                 new OperationErrorDto(
                     OperationErrorCode.TargetTimeout,
-                    "The operation budget expired.")),
-            terminateSession: false);
+                    "The operation budget expired."),
+                responseContext),
+            terminateSession: false,
+            maximumFrameBytes: responseContext.MaximumFrameBytes);
         if (prepared.Bytes is null)
         {
             await StopAsync().ConfigureAwait(false);
             return;
         }
 
-        await CommitBytesAsync(connection, prepared.Bytes).ConfigureAwait(false);
+        await CommitBytesAsync(
+                connection,
+                prepared.Bytes,
+                responseContext.MaximumFrameBytes,
+                hostShutdownToken)
+            .ConfigureAwait(false);
     }
 
     private async Task SendCommittedResponseAsync(
         NamedPipeConnection connection,
-        ResponseEnvelopeWire response)
+        ResponseEnvelopeWire response,
+        ResponseContext responseContext,
+        CancellationToken hostShutdownToken)
     {
-        var prepared = SerializePreparedResponse(response, terminateSession: false);
+        var prepared = SerializePreparedResponse(
+            response,
+            terminateSession: false,
+            maximumFrameBytes: responseContext.MaximumFrameBytes);
         if (prepared.Bytes is null)
         {
             await StopAsync().ConfigureAwait(false);
             return;
         }
 
-        await CommitBytesAsync(connection, prepared.Bytes).ConfigureAwait(false);
+        await CommitBytesAsync(
+                connection,
+                prepared.Bytes,
+                responseContext.MaximumFrameBytes,
+                hostShutdownToken)
+            .ConfigureAwait(false);
     }
 
     private async Task CommitBytesAsync(
         NamedPipeConnection connection,
-        byte[] bytes)
+        byte[] bytes,
+        int maximumFrameBytes,
+        CancellationToken hostShutdownToken)
     {
-        if (bytes.Length == 0 || bytes.Length > _options.MaximumFrameBytes)
+        if (bytes.Length == 0 || bytes.Length > maximumFrameBytes)
         {
             await StopAsync().ConfigureAwait(false);
             return;
@@ -978,7 +1074,7 @@ public sealed class AgentHost : IAsyncDisposable
 
         try
         {
-            await connection.WriteFrameAsync(bytes, _shutdown.Token).ConfigureAwait(false);
+            await connection.WriteFrameAsync(bytes, hostShutdownToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -987,7 +1083,7 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
-    private byte[]? TrySerializeResponse(ResponseEnvelopeWire response)
+    private static byte[]? TrySerializeResponse(ResponseEnvelopeWire response)
     {
         try
         {
@@ -1000,14 +1096,15 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
-    private ResponseEnvelopeWire CreateProtocolErrorResponse(
+    private static ResponseEnvelopeWire CreateProtocolErrorResponse(
         string requestId,
-        ProtocolErrorCode code)
+        ProtocolErrorCode code,
+        ResponseContext responseContext)
     {
         return new ResponseEnvelopeWire
         {
-            ProtocolVersion = _selectedProtocolVersion,
-            SessionId = SessionId!,
+            ProtocolVersion = responseContext.ProtocolVersion,
+            SessionId = responseContext.SessionId,
             RequestId = requestId,
             ResultStatus = ProtocolJsonCodec.ProtocolErrorStatus,
             ProtocolError = new ProtocolErrorWire { Code = Enum.GetName(typeof(ProtocolErrorCode), code)! }
@@ -1195,14 +1292,15 @@ public sealed class AgentHost : IAsyncDisposable
         }
     }
 
-    private ResponseEnvelopeWire CreateOperationErrorResponse(
+    private static ResponseEnvelopeWire CreateOperationErrorResponse(
         string requestId,
-        OperationErrorDto error)
+        OperationErrorDto error,
+        ResponseContext responseContext)
     {
         return new ResponseEnvelopeWire
         {
-            ProtocolVersion = _selectedProtocolVersion,
-            SessionId = SessionId!,
+            ProtocolVersion = responseContext.ProtocolVersion,
+            SessionId = responseContext.SessionId,
             RequestId = requestId,
             ResultStatus = ProtocolJsonCodec.OperationErrorStatus,
             OperationError = new OperationErrorWire

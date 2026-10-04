@@ -52,7 +52,7 @@ Runtime boundaries are based on actual `AssemblyLoadContext` identity. Boundary 
 
 ## I3 boundaries
 
-The target publishes exactly one bootstrap descriptor on stdout; RPC uses only the authenticated Named Pipe. The session is single-client, non-reconnecting, same-account, and bound to the exact PID plus opaque process creation identity. Failed candidates do not consume the nonce, caller abandonment remains bounded by outstanding slots, and late target work cannot emit a second response. I3 deliberately excludes attach/injection, reflection, text inspection, WPF, leases, and ProviderAware behavior.
+The target publishes exactly one bootstrap descriptor on stdout; RPC uses only the authenticated Named Pipe. The session is single-client, non-reconnecting, same-account, and bound to the exact PID plus opaque process creation identity. Failed candidates do not consume the nonce, caller abandonment remains bounded by outstanding slots, and late target work cannot emit a second response. Terminal Host shutdown does not wait indefinitely for late target work; queued WinForms work that never starts becomes unavailable, while already-running target work is allowed to finish naturally. I3 deliberately excludes attach/injection, reflection, text inspection, WPF, leases, and ProviderAware behavior.
 
 ## Build and test
 
