@@ -9,5 +9,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="NativeSpy.Client.Tests" />
+    <InternalsVisibleTo Include="NativeSpy.ObjectSpy" />
   </ItemGroup>
 </Project>

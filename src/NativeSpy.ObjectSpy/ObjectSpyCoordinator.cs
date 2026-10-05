@@ -139,7 +139,54 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             candidate = await _uiSession
                 .FreezeFromPointAsync(screenPoint, cancellationToken)
                 .ConfigureAwait(false);
-            var commit = TryCommitFrozenSelection(attempt, candidate);
+            var frozen = candidate;
+            var externalEvidence = await frozen.Source
+                .CaptureAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (_uiSession.IsPoisoned)
+            {
+                SetFreezeState(
+                    attempt,
+                    ObjectSpySelectionState.Quarantined,
+                    "The UI Automation session was quarantined after a timeout.");
+                return;
+            }
+
+            if (externalEvidence.OperationError is not null)
+            {
+                SetFreezeState(
+                    attempt,
+                    ObjectSpySelectionState.Error,
+                    externalEvidence.OperationError.Message ?? externalEvidence.OperationError.Code.ToString());
+                return;
+            }
+
+            var correlation = await _correlationCoordinator
+                .ResolveUiaToWinFormsAsync(
+                    externalEvidence,
+                    frozen.Source,
+                    _correlationPort,
+                    _policy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (_uiSession.IsPoisoned)
+            {
+                SetFreezeState(
+                    attempt,
+                    ObjectSpySelectionState.Quarantined,
+                    "The UI Automation session was quarantined after a timeout.");
+                return;
+            }
+
+            var classification = CorrelationFailureClassifier.Classify(correlation);
+            var commit = TryCommitFrozenSelection(
+                attempt,
+                candidate,
+                externalEvidence,
+                correlation,
+                classification);
             if (commit is null)
             {
                 return;
@@ -153,47 +200,6 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             }
 
             PublishStateChanged();
-            var frozen = committed.Selection;
-            var externalEvidence = await frozen.Source
-                .CaptureAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (!TryCommitExternalEvidence(attempt, externalEvidence))
-            {
-                return;
-            }
-            PublishStateChanged();
-
-            var correlation = await _correlationCoordinator
-                .ResolveUiaToWinFormsAsync(
-                    externalEvidence,
-                    frozen.Source,
-                    _correlationPort,
-                    _policy,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (!TryCommitCorrelation(attempt, correlation))
-            {
-                return;
-            }
-            PublishStateChanged();
-
-            if (_uiSession.IsPoisoned)
-            {
-                SetFreezeState(
-                    attempt,
-                    ObjectSpySelectionState.Quarantined,
-                    "The UI Automation session was quarantined after a timeout.");
-                return;
-            }
-
-            if (IsStaleCorrelation(correlation))
-            {
-                SetFreezeState(
-                    attempt,
-                    ObjectSpySelectionState.Stale,
-                    "The frozen UI Automation source is no longer valid.");
-                return;
-            }
 
             if (correlation.OperationError is not null)
             {
@@ -690,7 +696,10 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
 
     private FreezeCommit? TryCommitFrozenSelection(
         FreezeStamp stamp,
-        ObjectSpyFrozenSelection frozen)
+        ObjectSpyFrozenSelection frozen,
+        ExternalUiaEvidenceDto externalEvidence,
+        CorrelationResultDto correlation,
+        CorrelationFailureClassification classification)
     {
         lock (_gate)
         {
@@ -704,12 +713,16 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             _state.Generation++;
             ++_clrNavigationGeneration;
             ResetClrStateLocked();
-            _state.SelectionState = ObjectSpySelectionState.Frozen;
+            _state.SelectionState = classification == CorrelationFailureClassification.ExternalSelectionStale
+                ? ObjectSpySelectionState.Stale
+                : ObjectSpySelectionState.Frozen;
             _state.SelectionObservation = frozen.Observation;
             _state.PreviewObservation = null;
-            _state.ExternalEvidence = null;
-            _state.Correlation = null;
-            _state.Error = null;
+            _state.ExternalEvidence = externalEvidence;
+            _state.Correlation = correlation;
+            _state.Error = classification == CorrelationFailureClassification.ExternalSelectionStale
+                ? "The frozen UI Automation source is no longer valid."
+                : null;
             return new FreezeCommit(frozen, previous, _state.Generation, _clrNavigationGeneration);
         }
     }
@@ -825,38 +838,6 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         PublishStateChanged();
     }
 
-    private bool TryCommitExternalEvidence(
-        FreezeStamp stamp,
-        ExternalUiaEvidenceDto evidence)
-    {
-        lock (_gate)
-        {
-            if (_externalOperationEpoch != stamp.ExternalEpoch)
-            {
-                return false;
-            }
-
-            _state.ExternalEvidence = evidence;
-            return true;
-        }
-    }
-
-    private bool TryCommitCorrelation(
-        FreezeStamp stamp,
-        CorrelationResultDto correlation)
-    {
-        lock (_gate)
-        {
-            if (_externalOperationEpoch != stamp.ExternalEpoch)
-            {
-                return false;
-            }
-
-            _state.Correlation = correlation;
-            return true;
-        }
-    }
-
     private bool TrySetClrUnavailable(FreezeStamp stamp)
     {
         lock (_gate)
@@ -873,7 +854,6 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             _state.NextContinuationToken = null;
             _state.FieldResults = Array.Empty<MemberReadResultDto>();
             _state.LastReadResult = null;
-            _state.Error = null;
             return true;
         }
     }
@@ -920,14 +900,6 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
     private void PublishStateChanged()
     {
         StateChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private static bool IsStaleCorrelation(CorrelationResultDto correlation)
-    {
-        return correlation.Limitations.Any(limitation => limitation.Code is
-            "ExternalSourceNotAvailable"
-            or "ExternalSourceUnavailableOrIncomplete"
-            or "ExternalEvidenceSourceMismatch");
     }
 
     private static bool IsExpectedFlaUiFailure(Exception exception)

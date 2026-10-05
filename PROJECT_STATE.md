@@ -59,7 +59,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 226 passing, 0 skipped in the verified environment (90 Protocol, 21 Agent, 64 Client, 2 Agent.WinForms, 1 FlaUI, 48 integration).
+- Tests: 237 passing, 0 skipped in the verified environment (91 Protocol, 21 Agent, 64 Client, 2 Agent.WinForms, 1 FlaUI, 58 integration).
 
 ## Known limitations
 
