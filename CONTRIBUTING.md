@@ -59,6 +59,16 @@ BREAKING CHANGE: rename the public correlation result field
 
 Keep the subject imperative, concise, and specific. Use the body to explain why when the subject is not enough.
 
+## Local commit hook
+
+This repository includes a tracked `commit-msg` hook. Install it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook validates normal commit subjects, permits Git-generated merge and revert subjects, and rejects `fixup!` and `squash!` subjects. It checks the subject only; Conventional Commit bodies and footers remain available. Local hooks can be bypassed with `--no-verify`, but agents and contributors should not bypass them.
+
 ## Validation before commit
 
 From the repository root:
