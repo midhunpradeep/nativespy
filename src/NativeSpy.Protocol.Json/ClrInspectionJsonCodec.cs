@@ -399,7 +399,12 @@ public static class ClrInspectionJsonCodec
 
     private static void ValidateValueTypeNesting(ClrValueWire wire, bool nestedValueType)
     {
-        var fields = wire.StructFields ?? Array.Empty<StructFieldWire>();
+        if (wire.StructFields is null)
+        {
+            throw new ProtocolJsonException("A value type is missing structFields.");
+        }
+
+        var fields = wire.StructFields;
         if (fields.Length > ClrInspectionContractLimits.MaxStructFields)
         {
             throw new ProtocolJsonException("A value type exceeds the maximum field count.");
@@ -540,7 +545,7 @@ public static class ClrInspectionJsonCodec
             ClrValueKind.ValueType => ClrValueDto.CreateValueType(
                 ProtocolJsonCodec.FromWire(wire.ValueType ?? throw new ProtocolJsonException("A value type is missing its type.")),
                 ProtocolJsonCollection.MapRequiredElements(
-                    wire.StructFields ?? Array.Empty<StructFieldWire>(),
+                    wire.StructFields!,
                     field => FromWire(field),
                     "value type structFields"),
                 wire.StructTruncated,
@@ -824,16 +829,17 @@ public static class ClrInspectionJsonCodec
             throw new ProtocolJsonException("A value type exceeds the maximum payload size.");
         }
 
-        var fields = Array.Empty<JsonElement>();
-        if (element.TryGetProperty("structFields", out var fieldsElement))
+        if (!element.TryGetProperty("structFields", out var fieldsElement))
         {
-            if (fieldsElement.ValueKind != JsonValueKind.Array)
-            {
-                throw new ProtocolJsonException("A value type structFields property must be an array.");
-            }
-
-            fields = fieldsElement.EnumerateArray().ToArray();
+            throw new ProtocolJsonException("A value type is missing structFields.");
         }
+
+        if (fieldsElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new ProtocolJsonException("A value type structFields property must be an array.");
+        }
+
+        var fields = fieldsElement.EnumerateArray().ToArray();
 
         if (fields.Length > ClrInspectionContractLimits.MaxStructFields)
         {

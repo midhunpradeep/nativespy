@@ -327,6 +327,49 @@ public sealed class ClrInspectionProtocolTests
     }
 
     [Fact]
+    public void Type_identity_collections_require_presence_across_real_clr_value_shapes()
+    {
+        var enumType = TypeIdentityJson("Enum", isValueType: true);
+        Assert.Equal(ClrValueKind.Enum, DecodeValue(EnumJsonWithType(enumType)).Kind);
+        AssertInvalidValue(EnumJsonWithType(RemoveEmptyArrayProperty(enumType, "genericArguments")));
+        AssertInvalidValue(EnumJsonWithType(ReplaceEmptyArrayWithNull(enumType, "genericArguments")));
+        AssertInvalidValue(EnumJsonWithType(ReplaceEmptyArrayWithNullElement(enumType, "genericArguments")));
+
+        var objectType = TypeIdentityJson("Object", isValueType: false);
+        Assert.Equal(ClrValueKind.ObjectReference, DecodeValue(ObjectReferenceValueJson(objectType)).Kind);
+        AssertInvalidValue(ObjectReferenceValueJson(RemoveEmptyArrayProperty(objectType, "interfaces")));
+        AssertInvalidValue(ObjectReferenceValueJson(ReplaceEmptyArrayWithNull(objectType, "interfaces")));
+        AssertInvalidValue(ObjectReferenceValueJson(ReplaceEmptyArrayWithNullElement(objectType, "interfaces")));
+
+        var representedType = TypeIdentityJson("Represented", isValueType: false);
+        AssertInvalidValue(TypeObjectValueJson(RemoveEmptyArrayProperty(representedType, "genericArguments")));
+        AssertInvalidValue(TypeObjectValueJson(RemoveEmptyArrayProperty(representedType, "interfaces")));
+
+        using var describeMissing = JsonDocument.Parse(
+            DescribeResponseJson(RemoveEmptyArrayProperty(representedType, "genericArguments")));
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeDescribeObjectResponse(describeMissing.RootElement));
+    }
+
+    [Fact]
+    public void Value_type_struct_fields_require_presence_but_accept_explicit_empty_and_bounded_fields()
+    {
+        var typeOnly = ValueTypeJson("Root", string.Empty, notExpanded: true);
+        var decodedTypeOnly = DecodeValue(typeOnly);
+        Assert.Empty(decodedTypeOnly.StructFields!);
+        Assert.True(decodedTypeOnly.StructNotExpanded);
+
+        var expanded = ValueTypeJson(
+            "Root",
+            StructFieldJson("Number", "{\"kind\":\"Integer\",\"integerKind\":\"Int32\",\"integerValue\":\"7\"}"));
+        Assert.Single(DecodeValue(expanded).StructFields!);
+
+        AssertInvalidValue(RemoveEmptyArrayProperty(typeOnly, "structFields"));
+        AssertInvalidValue(ReplaceEmptyArrayWithNull(typeOnly, "structFields"));
+        AssertInvalidValue(ReplaceEmptyArrayWithNullElement(typeOnly, "structFields"));
+    }
+
+    [Fact]
     public void Nested_wire_objects_with_missing_required_properties_are_protocol_errors()
     {
         var malformedManagedObject = "{\"handle\":null,\"boundaryId\":\"boundary\",\"contextId\":\"context\"}";
@@ -418,7 +461,48 @@ public sealed class ClrInspectionProtocolTests
 
     private static string EnumJson(string underlyingKind, string underlyingValue)
     {
-        return $"{{\"kind\":\"Enum\",\"enumType\":{TypeIdentityJson("Enum", isValueType: true)},\"enumUnderlyingKind\":\"{underlyingKind}\",\"enumUnderlyingValue\":\"{underlyingValue}\"}}";
+        return EnumJsonWithType(
+            TypeIdentityJson("Enum", isValueType: true),
+            underlyingKind,
+            underlyingValue);
+    }
+
+    private static string EnumJsonWithType(
+        string typeJson,
+        string underlyingKind = "Int32",
+        string underlyingValue = "1")
+    {
+        return $"{{\"kind\":\"Enum\",\"enumType\":{typeJson},\"enumUnderlyingKind\":\"{underlyingKind}\",\"enumUnderlyingValue\":\"{underlyingValue}\"}}";
+    }
+
+    private static string ObjectReferenceValueJson(string typeJson)
+    {
+        return $"{{\"kind\":\"ObjectReference\",\"objectType\":{typeJson},\"objectReference\":{ManagedObjectJson()}}}";
+    }
+
+    private static string TypeObjectValueJson(string typeJson)
+    {
+        return $"{{\"kind\":\"TypeObject\",\"representedType\":{typeJson}}}";
+    }
+
+    private static string DescribeResponseJson(string typeJson)
+    {
+        return $"{{\"object\":{{\"handle\":{{\"sessionId\":\"session\",\"handleId\":\"object\",\"generation\":1,\"kind\":\"ClrObject\",\"boundaryId\":\"boundary\"}},\"typeIdentity\":{typeJson},\"boundaryId\":\"boundary\"}}}}";
+    }
+
+    private static string RemoveEmptyArrayProperty(string json, string propertyName)
+    {
+        return json.Replace($",\"{propertyName}\":[]", string.Empty, StringComparison.Ordinal);
+    }
+
+    private static string ReplaceEmptyArrayWithNull(string json, string propertyName)
+    {
+        return json.Replace($"\"{propertyName}\":[]", $"\"{propertyName}\":null", StringComparison.Ordinal);
+    }
+
+    private static string ReplaceEmptyArrayWithNullElement(string json, string propertyName)
+    {
+        return json.Replace($"\"{propertyName}\":[]", $"\"{propertyName}\":[null]", StringComparison.Ordinal);
     }
 
     private static string ValueTypeJson(

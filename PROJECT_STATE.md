@@ -36,7 +36,7 @@
 - dedicated serialized MTA UIA3 worker, physical point preview/freeze observations, PID-only candidate validation, and bounded hard-stuck quarantine;
 - `NativeSpy.ObjectSpy` Exact-only coordinator with transactional freeze candidates, separate preview/committed UIA facts, quarantine-preserving CLR state, independent CLR navigation epochs, lazy property reads, member paging, bounded field batches, explicit object-reference navigation, late-result rejection, and overlay port;
 - runnable WPF-only client `NativeSpy.ObjectSpy.App` with a nonactivating click-through overlay and controlled synthetic WinForms target bootstrap;
-- semantic protocol/value validation, nested malformed CLR-wire rejection, malformed-success client/session policy, Agent value/lifetime and collectible-ALC proof, malformed-request session survival, deterministic preview/freeze/candidate race and quarantine tests, FlaUI timeout quarantine, and live ObjectSpy end-to-end proof tests;
+- semantic protocol/value validation including required CLR wire-collection presence, nested malformed CLR-wire rejection, malformed-success client/session policy, Agent value/lifetime and collectible-ALC proof, malformed-request session survival, deterministic preview/freeze/candidate race and quarantine tests, FlaUI timeout quarantine, and live ObjectSpy end-to-end proof tests;
 
 ## Not implemented / deferred
 
@@ -59,7 +59,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 248 passing, 0 skipped in the verified environment (92 Protocol, 21 Agent, 64 Client, 2 Agent.WinForms, 1 FlaUI, 68 integration).
+- Tests: 252 passing, 0 skipped in the verified environment (94 Protocol, 21 Agent, 64 Client, 2 Agent.WinForms, 1 FlaUI, 70 integration).
 
 ## Known limitations
 

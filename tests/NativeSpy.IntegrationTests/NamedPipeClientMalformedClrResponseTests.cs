@@ -19,7 +19,28 @@ public sealed class NamedPipeClientMalformedClrResponseTests
     [InlineData("clr.listMembers")]
     [InlineData("clr.readFieldValues")]
     [InlineData("clr.readPropertyValue")]
-    public async Task Malformed_clr_success_payloads_become_terminal_protocol_failures(string operation)
+    public Task Malformed_clr_success_payloads_become_terminal_protocol_failures(string operation)
+    {
+        return AssertMalformedResponseTerminalAsync(operation, response: null);
+    }
+
+    [Fact]
+    public async Task Missing_type_identity_collection_uses_terminal_protocol_failure_policy()
+    {
+        await AssertMalformedResponseTerminalAsync(
+            "clr.describeObject",
+            "{\"object\":{\"handle\":{\"sessionId\":\"session\",\"handleId\":\"object\",\"generation\":1,\"kind\":\"ClrObject\",\"boundaryId\":\"boundary\"},\"typeIdentity\":{\"typeId\":\"type\",\"fullName\":\"Example.Type\",\"assemblySimpleName\":\"Example\",\"boundaryId\":\"boundary\",\"isValueType\":false,\"interfaces\":[]},\"boundaryId\":\"boundary\"}}");
+    }
+
+    [Fact]
+    public async Task Missing_value_type_struct_fields_uses_terminal_protocol_failure_policy()
+    {
+        await AssertMalformedResponseTerminalAsync(
+            "clr.readFieldValues",
+            "{\"results\":[{\"member\":{\"sessionId\":\"session\",\"memberId\":\"member\",\"boundaryId\":\"boundary\",\"declaringTypeId\":\"type\"},\"outcome\":\"Available\",\"value\":{\"kind\":\"ValueType\",\"valueType\":{\"typeId\":\"value\",\"fullName\":\"Example.Value\",\"assemblySimpleName\":\"Example\",\"boundaryId\":\"boundary\",\"isValueType\":true,\"genericArguments\":[],\"interfaces\":[]},\"structTruncated\":false,\"structNotExpanded\":true}}]}");
+    }
+
+    private static async Task AssertMalformedResponseTerminalAsync(string operation, string? response)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -29,7 +50,7 @@ public sealed class NamedPipeClientMalformedClrResponseTests
         using var options = CreateOptions();
         await using var host = new AgentHost(
             options,
-            new MalformedResponseCompositionFactory(operation));
+            new MalformedResponseCompositionFactory(operation, response));
         await host.StartAsync();
         await using var client = await NamedPipeClientSession.ConnectAsync(
             host.BootstrapDescriptor,
@@ -100,10 +121,12 @@ public sealed class NamedPipeClientMalformedClrResponseTests
     private sealed class MalformedResponseCompositionFactory : IAgentHostCompositionFactory
     {
         private readonly string _operation;
+        private readonly string? _response;
 
-        public MalformedResponseCompositionFactory(string operation)
+        public MalformedResponseCompositionFactory(string operation, string? response = null)
         {
             _operation = operation;
+            _response = response;
         }
 
         public IReadOnlyList<string> DeclaredOperationNames => new[] { _operation };
@@ -112,15 +135,15 @@ public sealed class NamedPipeClientMalformedClrResponseTests
             IManagedObjectReferenceService identityService,
             HostSessionContext context)
         {
-            return new MalformedResponseComposition(_operation);
+            return new MalformedResponseComposition(_operation, _response);
         }
     }
 
     private sealed class MalformedResponseComposition : IAgentHostComposition
     {
-        public MalformedResponseComposition(string operation)
+        public MalformedResponseComposition(string operation, string? response)
         {
-            Handlers = new[] { new MalformedResponseHandler(operation) };
+            Handlers = new[] { new MalformedResponseHandler(operation, response) };
         }
 
         public IReadOnlyList<IAgentOperationHandler> Handlers { get; }
@@ -130,9 +153,12 @@ public sealed class NamedPipeClientMalformedClrResponseTests
 
     private sealed class MalformedResponseHandler : IAgentOperationHandler
     {
-        public MalformedResponseHandler(string operation)
+        private readonly string? _response;
+
+        public MalformedResponseHandler(string operation, string? response)
         {
             OperationName = operation;
+            _response = response;
         }
 
         public string OperationName { get; }
@@ -142,7 +168,7 @@ public sealed class NamedPipeClientMalformedClrResponseTests
             JsonElement payload,
             CancellationToken cancellationToken)
         {
-            var response = OperationName switch
+            var response = _response ?? OperationName switch
             {
                 "clr.describeObject" => "{\"object\":{\"handle\":null,\"boundaryId\":\"boundary\"}}",
                 "clr.listMembers" => "{\"members\":[null],\"nextContinuationToken\":null}",

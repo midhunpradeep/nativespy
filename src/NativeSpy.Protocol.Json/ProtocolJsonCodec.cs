@@ -1091,6 +1091,16 @@ public static class ProtocolJsonCodec
             throw new ProtocolJsonException("The type identity payload was null.");
         }
 
+        if (wire.GenericArguments is null)
+        {
+            throw new ProtocolJsonException("A type identity is missing genericArguments.");
+        }
+
+        if (wire.Interfaces is null)
+        {
+            throw new ProtocolJsonException("A type identity is missing interfaces.");
+        }
+
         return new TypeIdentityDto(
             wire.TypeId,
             wire.FullName,
@@ -1098,11 +1108,11 @@ public static class ProtocolJsonCodec
             wire.BoundaryId,
             wire.IsValueType,
             ProtocolJsonCollection.MapRequiredElements(
-                wire.GenericArguments ?? Array.Empty<TypeRefWire>(),
+                wire.GenericArguments,
                 type => FromWire(type),
                 "type generic arguments"),
             ProtocolJsonCollection.MapRequiredElements(
-                wire.Interfaces ?? Array.Empty<TypeRefWire>(),
+                wire.Interfaces,
                 type => FromWire(type),
                 "type interfaces"),
             wire.AssemblyVersion,
