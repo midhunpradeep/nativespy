@@ -119,7 +119,10 @@ public static class ClrInspectionJsonCodec
         try
         {
             return new ListMembersResponseDto(
-                wire.Members.Select(FromWire),
+                ProtocolJsonCollection.MapRequiredElements(
+                    wire.Members,
+                    member => FromWire(member),
+                    "list-members response members"),
                 wire.NextContinuationToken);
         }
         catch (Exception exception) when (IsContractFailure(exception))
@@ -156,7 +159,10 @@ public static class ClrInspectionJsonCodec
 
                 return new ReadFieldValuesRequestDto(
                     ReadManagedObject(wire.Object),
-                    wire.Members.Select(FromWire));
+                    ProtocolJsonCollection.MapRequiredElements(
+                        wire.Members,
+                        member => FromWire(member),
+                        "read-field-values members"));
             },
             "read-field-values payload");
     }
@@ -185,7 +191,11 @@ public static class ClrInspectionJsonCodec
 
         try
         {
-            return new ReadFieldValuesResponseDto(wire.Results.Select(FromWire));
+            return new ReadFieldValuesResponseDto(
+                ProtocolJsonCollection.MapRequiredElements(
+                    wire.Results,
+                    result => FromWire(result),
+                    "read-field-values response results"));
         }
         catch (Exception exception) when (IsContractFailure(exception))
         {
@@ -529,7 +539,10 @@ public static class ClrInspectionJsonCodec
                 wire.TypeObjectReference is null ? null : ProtocolJsonCodec.FromWire(wire.TypeObjectReference)),
             ClrValueKind.ValueType => ClrValueDto.CreateValueType(
                 ProtocolJsonCodec.FromWire(wire.ValueType ?? throw new ProtocolJsonException("A value type is missing its type.")),
-                (wire.StructFields ?? Array.Empty<StructFieldWire>()).Select(FromWire),
+                ProtocolJsonCollection.MapRequiredElements(
+                    wire.StructFields ?? Array.Empty<StructFieldWire>(),
+                    field => FromWire(field),
+                    "value type structFields"),
                 wire.StructTruncated,
                 wire.StructNotExpanded),
             ClrValueKind.ObjectReference => ClrValueDto.CreateObjectReference(

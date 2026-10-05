@@ -963,18 +963,30 @@ public static class ProtocolJsonCodec
             wire.AdapterId,
             wire.ProcessId,
             wire.CandidateTarget is null ? null : FromWire(wire.CandidateTarget),
-            wire.EvidenceFacts.Select(fact => new CorrelationEvidenceFactDto(
-                fact.Name,
-                ParseEnum<ProofOutcome>(fact.Outcome, nameof(fact.Outcome)),
-                ParseEnum<EvidenceKind>(fact.EvidenceKind, nameof(fact.EvidenceKind)),
-                fact.Detail)),
-            wire.ValidationFacts.Select(fact => new CorrelationValidationFactDto(
-                fact.Name,
-                ParseEnum<ValidationOutcome>(fact.Outcome, nameof(fact.Outcome)),
-                fact.Detail)),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.EvidenceFacts,
+                fact => new CorrelationEvidenceFactDto(
+                    fact.Name,
+                    ParseEnum<ProofOutcome>(fact.Outcome, nameof(fact.Outcome)),
+                    ParseEnum<EvidenceKind>(fact.EvidenceKind, nameof(fact.EvidenceKind)),
+                    fact.Detail),
+                "framework evidence facts"),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.ValidationFacts,
+                fact => new CorrelationValidationFactDto(
+                    fact.Name,
+                    ParseEnum<ValidationOutcome>(fact.Outcome, nameof(fact.Outcome)),
+                    fact.Detail),
+                "framework validation facts"),
             FromWire(wire.Effects),
-            wire.AdapterMetadata.Select(FromWire),
-            wire.Limitations.Select(limitation => new CorrelationLimitationDto(limitation.Code, limitation.Detail)),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.AdapterMetadata,
+                metadata => FromWire(metadata),
+                "framework adapter metadata"),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.Limitations,
+                limitation => new CorrelationLimitationDto(limitation.Code, limitation.Detail),
+                "framework limitations"),
             wire.OperationError is null ? null : FromWire(wire.OperationError));
     }
 
@@ -1009,7 +1021,10 @@ public static class ProtocolJsonCodec
             ParseEnum<FrameworkEntityKind>(wire.EntityKind, nameof(wire.EntityKind)),
             wire.LiveHandle is null ? null : FromWire(wire.LiveHandle),
             wire.Locator is null ? null : FromWire(wire.Locator),
-            (wire.GenerationRefs ?? Array.Empty<GenerationWire>()).Select(FromWire),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.GenerationRefs ?? Array.Empty<GenerationWire>(),
+                generation => FromWire(generation),
+                "framework generation references"),
             wire.AdapterMetadata is null ? null : FromWire(wire.AdapterMetadata));
     }
 
@@ -1022,7 +1037,10 @@ public static class ProtocolJsonCodec
                 : new HwndInfoDto(wire.HwndObservation.Hwnd, wire.HwndObservation.HwndGeneration),
             wire.ProcessId,
             wire.ProviderObservationEpoch,
-            (wire.GenerationRefs ?? Array.Empty<GenerationWire>()).Select(FromWire),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.GenerationRefs ?? Array.Empty<GenerationWire>(),
+                generation => FromWire(generation),
+                "native generation references"),
             wire.AdapterMetadata is null ? null : FromWire(wire.AdapterMetadata));
     }
 
@@ -1044,8 +1062,14 @@ public static class ProtocolJsonCodec
             wire.AssemblySimpleName,
             wire.BoundaryId,
             wire.IsValueType,
-            (wire.GenericArguments ?? Array.Empty<TypeRefWire>()).Select(FromWire),
-            (wire.Interfaces ?? Array.Empty<TypeRefWire>()).Select(FromWire),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.GenericArguments ?? Array.Empty<TypeRefWire>(),
+                type => FromWire(type),
+                "type generic arguments"),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.Interfaces ?? Array.Empty<TypeRefWire>(),
+                type => FromWire(type),
+                "type interfaces"),
             wire.AssemblyVersion,
             wire.AssemblyCulture,
             wire.PublicKeyToken,
@@ -1073,8 +1097,10 @@ public static class ProtocolJsonCodec
                 ParseEnum<EffectCategory>(value, nameof(wire.Categories))),
             ParseEnum<FrameworkStateEffect>(wire.FrameworkState, nameof(wire.FrameworkState)),
             ParseEnum<ApplicationCallbackEffect>(wire.ApplicationCallbacks, nameof(wire.ApplicationCallbacks)),
-            (wire.CallbackDetails ?? Array.Empty<CallbackWire>()).Select(detail =>
-                new CallbackDetailDto(detail.Name, detail.Count, detail.CountKnown)),
+            ProtocolJsonCollection.MapRequiredElements(
+                wire.CallbackDetails ?? Array.Empty<CallbackWire>(),
+                detail => new CallbackDetailDto(detail.Name, detail.Count, detail.CountKnown),
+                "correlation callback details"),
             ParseEnum<VisibleMutationEffect>(wire.VisibleMutation, nameof(wire.VisibleMutation)),
             wire.Operations ?? Array.Empty<string>());
     }
@@ -1105,10 +1131,17 @@ public static class ProtocolJsonCodec
             DetachedMetadataValueKind.String when wire.StringValue is not null
                 => DetachedMetadataValueDto.String(wire.StringValue),
             DetachedMetadataValueKind.Array when wire.ArrayValue is not null
-                => DetachedMetadataValueDto.Array(wire.ArrayValue.Select(FromWire)),
+                => DetachedMetadataValueDto.Array(
+                    ProtocolJsonCollection.MapRequiredElements(
+                        wire.ArrayValue,
+                        value => FromWire(value),
+                        "metadata array values")),
             DetachedMetadataValueKind.Object when wire.ObjectValue is not null
-                => DetachedMetadataValueDto.Object(wire.ObjectValue.Select(property =>
-                    new DetachedMetadataPropertyDto(property.Name, FromWire(property.Value)))),
+                => DetachedMetadataValueDto.Object(
+                    ProtocolJsonCollection.MapRequiredElements(
+                        wire.ObjectValue,
+                        property => new DetachedMetadataPropertyDto(property.Name, FromWire(property.Value)),
+                        "metadata object properties")),
             _ => throw new ProtocolJsonException("The metadata payload does not match its kind.")
         };
     }

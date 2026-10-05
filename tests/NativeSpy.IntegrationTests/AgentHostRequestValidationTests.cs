@@ -198,6 +198,43 @@ public sealed class AgentHostRequestValidationTests
     }
 
     [Fact]
+    public async Task Null_clr_collection_element_is_invalid_request_and_session_survives()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var options = CreateOptions();
+        await using var host = new AgentHost(options, new ClrPayloadValidationCompositionFactory());
+        await host.StartAsync();
+        await using var client = await NamedPipeClientSession.ConnectAsync(
+            host.BootstrapDescriptor,
+            options.TargetProcessIdentity,
+            cancellationToken: CancellationToken.None);
+
+        using var malformed = JsonDocument.Parse(
+            "{\"object\":"
+            + "{\"handle\":{\"sessionId\":\"session\",\"handleId\":\"object\",\"generation\":1,\"kind\":\"ClrObject\",\"boundaryId\":\"boundary\"},\"boundaryId\":\"boundary\"}"
+            + ",\"members\":[null]}" );
+        var invalidResponse = await client.SendRequestAsync(
+            ProtocolOperationNames.ReadFieldValues,
+            malformed.RootElement,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal(ProtocolJsonCodec.ProtocolErrorStatus, invalidResponse.ResultStatus);
+        Assert.Equal(nameof(ProtocolErrorCode.InvalidRequest), invalidResponse.ProtocolError?.Code);
+        Assert.Equal(AgentHostState.Active, host.State);
+
+        using var valid = JsonDocument.Parse("{\"object\":{\"handle\":{\"sessionId\":\"session\",\"handleId\":\"object\",\"generation\":1,\"kind\":\"ClrObject\",\"boundaryId\":\"boundary\"},\"boundaryId\":\"boundary\"},\"members\":[]}");
+        var validResponse = await client.SendRequestAsync(
+            ProtocolOperationNames.ReadFieldValues,
+            valid.RootElement,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal(ProtocolJsonCodec.SuccessStatus, validResponse.ResultStatus);
+        Assert.Equal(AgentHostState.Active, host.State);
+    }
+
+    [Fact]
     public async Task Unknown_operation_is_a_nonterminal_protocol_error()
     {
         if (!OperatingSystem.IsWindows())
@@ -273,7 +310,8 @@ public sealed class AgentHostRequestValidationTests
     {
         public IReadOnlyList<string> DeclaredOperationNames { get; } = new[]
         {
-            ProtocolOperationNames.DescribeObject
+            ProtocolOperationNames.DescribeObject,
+            ProtocolOperationNames.ReadFieldValues
         };
 
         public IAgentHostComposition Create(
@@ -286,9 +324,10 @@ public sealed class AgentHostRequestValidationTests
 
     private sealed class ClrPayloadValidationComposition : IAgentHostComposition
     {
-        public IReadOnlyList<IAgentOperationHandler> Handlers { get; } = new[]
+        public IReadOnlyList<IAgentOperationHandler> Handlers { get; } = new IAgentOperationHandler[]
         {
-            new ClrPayloadValidationHandler()
+            new ClrPayloadValidationHandler(ProtocolOperationNames.DescribeObject),
+            new ClrPayloadValidationHandler(ProtocolOperationNames.ReadFieldValues)
         };
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -296,14 +335,27 @@ public sealed class AgentHostRequestValidationTests
 
     private sealed class ClrPayloadValidationHandler : IAgentOperationHandler
     {
-        public string OperationName => ProtocolOperationNames.DescribeObject;
+        public ClrPayloadValidationHandler(string operationName)
+        {
+            OperationName = operationName;
+        }
+
+        public string OperationName { get; }
 
         public Task<AgentHandlerResult> HandleAsync(
             AgentRequestContext context,
             JsonElement payload,
             CancellationToken cancellationToken)
         {
-            _ = ClrInspectionJsonCodec.ReadDescribeObjectPayload(payload);
+            if (OperationName == ProtocolOperationNames.DescribeObject)
+            {
+                _ = ClrInspectionJsonCodec.ReadDescribeObjectPayload(payload);
+            }
+            else
+            {
+                _ = ClrInspectionJsonCodec.ReadReadFieldValuesPayload(payload);
+            }
+
             return Task.FromResult(AgentHandlerResult.Success(payload));
         }
     }

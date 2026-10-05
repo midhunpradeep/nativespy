@@ -302,6 +302,31 @@ public sealed class ClrInspectionProtocolTests
     }
 
     [Fact]
+    public void Null_member_elements_are_rejected_in_all_clr_collection_shapes()
+    {
+        using var readFieldRequest = JsonDocument.Parse(
+            "{\"object\":"
+            + ManagedObjectJson()
+            + ",\"members\":[null]}" );
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.ReadReadFieldValuesPayload(readFieldRequest.RootElement));
+
+        using var listMembersResponse = JsonDocument.Parse("{\"members\":[null]}");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeListMembersResponse(listMembersResponse.RootElement));
+
+        using var readFieldResponse = JsonDocument.Parse("{\"results\":[null]}");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeReadFieldValuesResponse(readFieldResponse.RootElement));
+
+        AssertInvalidValue(ValueTypeJson("Root", "null"));
+        var typeWithNullGenericArgument = TypeIdentityJson("Reference", isValueType: false)
+            .Replace("\"genericArguments\":[]", "\"genericArguments\":[null]", StringComparison.Ordinal);
+        AssertInvalidValue(
+            $"{{\"kind\":\"ObjectReference\",\"objectType\":{typeWithNullGenericArgument},\"objectReference\":{ManagedObjectJson()}}}");
+    }
+
+    [Fact]
     public void Unknown_and_cross_branch_properties_are_rejected()
     {
         var member = new MemberRefDto("session", "member", "boundary", "type");
