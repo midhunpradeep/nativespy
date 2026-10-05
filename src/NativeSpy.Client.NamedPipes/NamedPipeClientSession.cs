@@ -394,7 +394,9 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return ClrInspectionClientResult<DescribeObjectResponseDto>.Success(
-                ClrInspectionJsonCodec.DeserializeDescribeObjectResponse(ReadSuccessPayload(response)));
+                DecodeClrSuccessPayload(
+                    ReadSuccessPayload(response),
+                    ClrInspectionJsonCodec.DeserializeDescribeObjectResponse));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -423,7 +425,9 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return ClrInspectionClientResult<ListMembersResponseDto>.Success(
-                ClrInspectionJsonCodec.DeserializeListMembersResponse(ReadSuccessPayload(response)));
+                DecodeClrSuccessPayload(
+                    ReadSuccessPayload(response),
+                    ClrInspectionJsonCodec.DeserializeListMembersResponse));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -450,7 +454,9 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return ClrInspectionClientResult<ReadFieldValuesResponseDto>.Success(
-                ClrInspectionJsonCodec.DeserializeReadFieldValuesResponse(ReadSuccessPayload(response)));
+                DecodeClrSuccessPayload(
+                    ReadSuccessPayload(response),
+                    ClrInspectionJsonCodec.DeserializeReadFieldValuesResponse));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -477,7 +483,9 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return ClrInspectionClientResult<ReadPropertyValueResponseDto>.Success(
-                ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse(ReadSuccessPayload(response)));
+                DecodeClrSuccessPayload(
+                    ReadSuccessPayload(response),
+                    ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -692,6 +700,26 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
             _ => throw new NamedPipeProtocolException(
                 new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation))
         };
+    }
+
+    private T DecodeClrSuccessPayload<T>(
+        JsonElement payload,
+        Func<JsonElement, T> decoder)
+    {
+        try
+        {
+            return decoder(payload);
+        }
+        catch (ProtocolJsonException exception)
+        {
+            var protocolException = new NamedPipeProtocolException(
+                new ProtocolErrorDto(
+                    ProtocolErrorCode.ProtocolViolation,
+                    "The Host returned an invalid CLR success payload.",
+                    exception.Message));
+            TransitionTerminal(protocolException);
+            throw protocolException;
+        }
     }
 
     private static FrameworkCorrelationEvidenceDto ReadFrameworkResponse(ResponseEnvelopeWire response)

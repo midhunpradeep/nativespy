@@ -13,4 +13,7 @@
     <ProjectReference Include="..\NativeSpy.Client\NativeSpy.Client.csproj" />
     <ProjectReference Include="..\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="NativeSpy.IntegrationTests" />
+  </ItemGroup>
 </Project>

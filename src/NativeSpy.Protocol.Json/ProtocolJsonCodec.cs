@@ -948,8 +948,13 @@ public static class ProtocolJsonCodec
         return new OperationErrorWire { Code = EnumName(error.Code), Message = error.Message };
     }
 
-    private static FrameworkCorrelationEvidenceDto FromWire(FrameworkEvidenceWire wire)
+    private static FrameworkCorrelationEvidenceDto FromWire(FrameworkEvidenceWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The framework evidence payload was null.");
+        }
+
         if (wire.EvidenceFacts is null
             || wire.ValidationFacts is null
             || wire.Effects is null
@@ -990,8 +995,13 @@ public static class ProtocolJsonCodec
             wire.OperationError is null ? null : FromWire(wire.OperationError));
     }
 
-    private static CorrelationTargetRefDto FromWire(TargetWire wire)
+    private static CorrelationTargetRefDto FromWire(TargetWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The correlation target payload was null.");
+        }
+
         var targetKind = ParseEnum<CorrelationTargetKind>(wire.TargetKind, nameof(wire.TargetKind));
         return targetKind switch
         {
@@ -1005,8 +1015,13 @@ public static class ProtocolJsonCodec
         };
     }
 
-    internal static ManagedObjectRefDto FromWire(ManagedObjectWire wire)
+    internal static ManagedObjectRefDto FromWire(ManagedObjectWire? wire)
     {
+        if (wire is null || wire.Handle is null)
+        {
+            throw new ProtocolJsonException("A managed object is missing its handle.");
+        }
+
         return new ManagedObjectRefDto(
             FromWire(wire.Handle),
             wire.TypeIdentity is null ? null : FromWire(wire.TypeIdentity),
@@ -1014,8 +1029,13 @@ public static class ProtocolJsonCodec
             wire.ContextId);
     }
 
-    private static FrameworkEntityRefDto FromWire(FrameworkEntityWire wire)
+    private static FrameworkEntityRefDto FromWire(FrameworkEntityWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The framework entity payload was null.");
+        }
+
         return new FrameworkEntityRefDto(
             wire.AdapterId,
             ParseEnum<FrameworkEntityKind>(wire.EntityKind, nameof(wire.EntityKind)),
@@ -1028,8 +1048,13 @@ public static class ProtocolJsonCodec
             wire.AdapterMetadata is null ? null : FromWire(wire.AdapterMetadata));
     }
 
-    private static NativeEntityRefDto FromWire(NativeEntityWire wire)
+    private static NativeEntityRefDto FromWire(NativeEntityWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The native entity payload was null.");
+        }
+
         return new NativeEntityRefDto(
             ParseEnum<NativeBoundaryKind>(wire.BoundaryKind, nameof(wire.BoundaryKind)),
             wire.HwndObservation is null
@@ -1044,8 +1069,13 @@ public static class ProtocolJsonCodec
             wire.AdapterMetadata is null ? null : FromWire(wire.AdapterMetadata));
     }
 
-    internal static HandleRefDto FromWire(HandleWire wire)
+    internal static HandleRefDto FromWire(HandleWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The handle payload was null.");
+        }
+
         return new HandleRefDto(
             wire.SessionId,
             wire.HandleId,
@@ -1054,8 +1084,13 @@ public static class ProtocolJsonCodec
             wire.BoundaryId);
     }
 
-    internal static TypeIdentityDto FromWire(TypeIdentityWire wire)
+    internal static TypeIdentityDto FromWire(TypeIdentityWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The type identity payload was null.");
+        }
+
         return new TypeIdentityDto(
             wire.TypeId,
             wire.FullName,
@@ -1085,13 +1120,33 @@ public static class ProtocolJsonCodec
             wire.DynamicIdentity);
     }
 
-    internal static TypeRefDto FromWire(TypeRefWire wire) => new(wire.TypeId, wire.BoundaryId);
-
-    private static GenerationRefDto FromWire(GenerationWire wire) =>
-        new(wire.AdapterId, wire.Kind, wire.Value, wire.ScopeId);
-
-    private static CorrelationEffectSummaryDto FromWire(EffectWire wire)
+    internal static TypeRefDto FromWire(TypeRefWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The type reference payload was null.");
+        }
+
+        return new TypeRefDto(wire.TypeId, wire.BoundaryId);
+    }
+
+    private static GenerationRefDto FromWire(GenerationWire? wire)
+    {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The generation reference payload was null.");
+        }
+
+        return new GenerationRefDto(wire.AdapterId, wire.Kind, wire.Value, wire.ScopeId);
+    }
+
+    private static CorrelationEffectSummaryDto FromWire(EffectWire? wire)
+    {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The correlation effects payload was null.");
+        }
+
         return new CorrelationEffectSummaryDto(
             (wire.Categories ?? Array.Empty<string>()).Select(value =>
                 ParseEnum<EffectCategory>(value, nameof(wire.Categories))),
@@ -1105,8 +1160,13 @@ public static class ProtocolJsonCodec
             wire.Operations ?? Array.Empty<string>());
     }
 
-    private static AdapterMetadataDto FromWire(MetadataWire wire)
+    private static AdapterMetadataDto FromWire(MetadataWire? wire)
     {
+        if (wire is null || wire.Payload is null)
+        {
+            throw new ProtocolJsonException("The adapter metadata payload is incomplete.");
+        }
+
         return new AdapterMetadataDto(
             wire.AdapterId,
             wire.SchemaId,
@@ -1114,8 +1174,13 @@ public static class ProtocolJsonCodec
             FromWire(wire.Payload));
     }
 
-    private static DetachedMetadataValueDto FromWire(MetadataValueWire wire)
+    private static DetachedMetadataValueDto FromWire(MetadataValueWire? wire)
     {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The metadata value payload was null.");
+        }
+
         var kind = ParseEnum<DetachedMetadataValueKind>(wire.Kind, nameof(wire.Kind));
         return kind switch
         {
@@ -1140,12 +1205,27 @@ public static class ProtocolJsonCodec
                 => DetachedMetadataValueDto.Object(
                     ProtocolJsonCollection.MapRequiredElements(
                         wire.ObjectValue,
-                        property => new DetachedMetadataPropertyDto(property.Name, FromWire(property.Value)),
+                        property =>
+                        {
+                            if (property is null || property.Value is null)
+                            {
+                                throw new ProtocolJsonException("A metadata object property is incomplete.");
+                            }
+
+                            return new DetachedMetadataPropertyDto(property.Name, FromWire(property.Value));
+                        },
                         "metadata object properties")),
             _ => throw new ProtocolJsonException("The metadata payload does not match its kind.")
         };
     }
 
-    private static OperationErrorDto FromWire(OperationErrorWire wire) =>
-        new(ParseEnum<OperationErrorCode>(wire.Code, nameof(wire.Code)), wire.Message);
+    private static OperationErrorDto FromWire(OperationErrorWire? wire)
+    {
+        if (wire is null)
+        {
+            throw new ProtocolJsonException("The operation error payload was null.");
+        }
+
+        return new OperationErrorDto(ParseEnum<OperationErrorCode>(wire.Code, nameof(wire.Code)), wire.Message);
+    }
 }

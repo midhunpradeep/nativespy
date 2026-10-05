@@ -23,7 +23,7 @@ internal sealed class TargetWire
 
 internal sealed class ManagedObjectWire
 {
-    public HandleWire Handle { get; set; } = new();
+    public HandleWire? Handle { get; set; }
     public TypeIdentityWire? TypeIdentity { get; set; }
     public string? BoundaryId { get; set; }
     public string? ContextId { get; set; }
@@ -139,7 +139,7 @@ internal sealed class MetadataWire
     public string AdapterId { get; set; } = string.Empty;
     public string SchemaId { get; set; } = string.Empty;
     public int SchemaVersion { get; set; }
-    public MetadataValueWire Payload { get; set; } = new();
+    public MetadataValueWire? Payload { get; set; }
 }
 
 internal sealed class MetadataValueWire

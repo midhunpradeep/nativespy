@@ -25,6 +25,9 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
     private readonly List<NavigationFrame> _navigation = new();
     private readonly ObjectSpyViewState _state = new();
     private ObjectSpyFrozenSelection? _frozenSelection;
+    private ObjectSpySelectionState _committedSelectionState;
+    private string? _committedSelectionError;
+    private bool _previewActive;
     private long _externalOperationEpoch;
     private long _previewEpoch;
     private long _overlayGeneration;
@@ -64,6 +67,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         _inspectionPort = inspectionPort ?? throw new ArgumentNullException(nameof(inspectionPort));
         _overlay = overlay ?? new NullObjectSpyOverlay();
         _state.SelectionState = ObjectSpySelectionState.Idle;
+        _committedSelectionState = ObjectSpySelectionState.Idle;
         _state.ClrState = ObjectSpyClrState.Unavailable;
     }
 
@@ -278,6 +282,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             if (_state.ClrState != ObjectSpyClrState.Ready || property.Kind != ClrMemberKind.Property)
             {
                 _state.Error = "The property is not currently readable.";
+                UpdateCommittedSelectionErrorLocked();
                 canRead = false;
             }
         }
@@ -311,6 +316,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
 
             _state.LastReadResult = result.Value!.Result;
             _state.Error = null;
+            UpdateCommittedSelectionErrorLocked();
         }
         PublishStateChanged();
     }
@@ -384,6 +390,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
                 _state.NavigationDepth = _navigation.Count;
                 _state.ClrState = ObjectSpyClrState.Ready;
                 _state.Error = null;
+                UpdateCommittedSelectionErrorLocked();
             }
             PublishStateChanged();
         }
@@ -460,6 +467,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             _state.FieldResults = _state.FieldResults.Concat(results).ToArray();
             _state.NextContinuationToken = response.Value.NextContinuationToken;
             _state.Error = null;
+            UpdateCommittedSelectionErrorLocked();
         }
         PublishStateChanged();
     }
@@ -477,6 +485,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
                 {
                     _state.ClrState = ObjectSpyClrState.Ready;
                     _state.Error = null;
+                    UpdateCommittedSelectionErrorLocked();
                     changed = true;
                 }
             }
@@ -493,6 +502,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
                 _state.ClrState = ObjectSpyClrState.Ready;
                 _state.NavigationDepth = _navigation.Count;
                 _state.Error = null;
+                UpdateCommittedSelectionErrorLocked();
                 changed = true;
             }
         }
@@ -658,6 +668,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             var externalEpoch = ++_externalOperationEpoch;
             var previewEpoch = ++_previewEpoch;
             var overlayGeneration = ++_overlayGeneration;
+            _previewActive = true;
             _state.SelectionState = ObjectSpySelectionState.Previewing;
             _state.PreviewObservation = null;
             _state.Error = null;
@@ -671,11 +682,19 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         {
             ++_externalOperationEpoch;
             ++_previewEpoch;
+            _previewActive = false;
             _state.PreviewObservation = null;
-            _state.SelectionState = _frozenSelection is null
-                ? ObjectSpySelectionState.Abandoned
-                : ObjectSpySelectionState.Frozen;
-            _state.Error = null;
+            if (_frozenSelection is null)
+            {
+                _state.SelectionState = ObjectSpySelectionState.Abandoned;
+                _state.Error = null;
+            }
+            else
+            {
+                _state.SelectionState = _committedSelectionState;
+                _state.Error = _committedSelectionError;
+            }
+
             return ++_overlayGeneration;
         }
     }
@@ -687,6 +706,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             var externalEpoch = ++_externalOperationEpoch;
             ++_previewEpoch;
             ++_clrNavigationGeneration;
+            _previewActive = false;
             var overlayGeneration = ++_overlayGeneration;
             _state.PreviewObservation = null;
             _state.Error = null;
@@ -713,6 +733,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             _state.Generation++;
             ++_clrNavigationGeneration;
             ResetClrStateLocked();
+            _previewActive = false;
             _state.SelectionState = classification == CorrelationFailureClassification.ExternalSelectionStale
                 ? ObjectSpySelectionState.Stale
                 : ObjectSpySelectionState.Frozen;
@@ -723,6 +744,8 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             _state.Error = classification == CorrelationFailureClassification.ExternalSelectionStale
                 ? "The frozen UI Automation source is no longer valid."
                 : null;
+            _committedSelectionState = _state.SelectionState;
+            _committedSelectionError = _state.Error;
             return new FreezeCommit(frozen, previous, _state.Generation, _clrNavigationGeneration);
         }
     }
@@ -776,6 +799,11 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
 
             _state.SelectionState = state;
             _state.Error = error;
+            if (state == ObjectSpySelectionState.Quarantined && _frozenSelection is not null)
+            {
+                _committedSelectionState = state;
+                _committedSelectionError = error;
+            }
         }
         PublishStateChanged();
     }
@@ -805,6 +833,7 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
 
             _state.ClrState = ObjectSpyClrState.Ready;
             _state.Error = error;
+            UpdateCommittedSelectionErrorLocked();
         }
         PublishStateChanged();
     }
@@ -834,6 +863,11 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
 
             _state.SelectionState = state;
             _state.Error = error;
+            if (_frozenSelection is not null)
+            {
+                _committedSelectionState = state;
+                _committedSelectionError = error;
+            }
         }
         PublishStateChanged();
     }
@@ -895,6 +929,19 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
             ? ObjectSpyClrState.Collected
             : ObjectSpyClrState.Error;
         _state.Error = error.Message ?? error.Code.ToString();
+        if (_frozenSelection is not null && !_previewActive)
+        {
+            _committedSelectionState = _state.SelectionState;
+            _committedSelectionError = _state.Error;
+        }
+    }
+
+    private void UpdateCommittedSelectionErrorLocked()
+    {
+        if (_frozenSelection is not null && !_previewActive)
+        {
+            _committedSelectionError = _state.Error;
+        }
     }
 
     private void PublishStateChanged()

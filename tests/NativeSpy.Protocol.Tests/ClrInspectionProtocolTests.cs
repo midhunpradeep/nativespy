@@ -327,6 +327,33 @@ public sealed class ClrInspectionProtocolTests
     }
 
     [Fact]
+    public void Nested_wire_objects_with_missing_required_properties_are_protocol_errors()
+    {
+        var malformedManagedObject = "{\"handle\":null,\"boundaryId\":\"boundary\",\"contextId\":\"context\"}";
+        AssertInvalidValue(
+            $"{{\"kind\":\"ObjectReference\",\"objectType\":{TypeIdentityJson("Object", isValueType: false)},\"objectReference\":{malformedManagedObject}}}");
+        AssertInvalidValue(
+            $"{{\"kind\":\"TypeObject\",\"representedType\":{TypeIdentityJson("Represented", isValueType: false)},\"typeObjectReference\":{malformedManagedObject}}}");
+
+        var malformedType = TypeIdentityJson("Malformed", isValueType: true)
+            .Replace("\"fullName\":\"Malformed\"", "\"fullName\":null", StringComparison.Ordinal);
+        AssertInvalidValue(
+            $"{{\"kind\":\"Enum\",\"enumType\":{malformedType},\"enumUnderlyingKind\":\"Int32\",\"enumUnderlyingValue\":\"1\"}}");
+        AssertInvalidValue(ValueTypeJson("Root", string.Empty, typeFullName: null)
+            .Replace("\"fullName\":\"Root\"", "\"fullName\":null", StringComparison.Ordinal));
+
+        using var malformedMember = JsonDocument.Parse(
+            "{\"members\":[{\"member\":null,\"kind\":\"Field\",\"name\":\"Field\",\"valueType\":{\"typeId\":\"int\",\"boundaryId\":\"boundary\"}}]}");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeListMembersResponse(malformedMember.RootElement));
+
+        using var malformedException = JsonDocument.Parse(
+            "{\"result\":{\"member\":{\"sessionId\":\"session\",\"memberId\":\"member\",\"boundaryId\":\"boundary\",\"declaringTypeId\":\"type\"},\"outcome\":\"TargetFailed\",\"targetException\":{\"exceptionType\":null,\"wasReflectionWrapper\":false}}}");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse(malformedException.RootElement));
+    }
+
+    [Fact]
     public void Unknown_and_cross_branch_properties_are_rejected()
     {
         var member = new MemberRefDto("session", "member", "boundary", "type");

@@ -99,6 +99,47 @@ public sealed class ObjectSpyCoordinatorTests
     }
 
     [Fact]
+    public async Task A_real_executor_capture_timeout_quarantines_and_preserves_the_healthy_graph()
+    {
+        var root = CreateObject("root", "Root");
+        var inspection = new FakeInspectionPort();
+        inspection.SetObject(root, Array.Empty<MemberDescriptorDto>(), Array.Empty<MemberReadResultDto>());
+        var healthy = CreateFrozenSelection("healthy", available: true);
+        var timeoutSource = new ExecutorTimeoutSource("timeout");
+        var timeout = new ObjectSpyFrozenSelection(
+            timeoutSource,
+            CreateObservation("timeout", available: true),
+            timeoutSource);
+        var ui = new FakeUiSession(ProcessId);
+        var freezeCount = 0;
+        ui.FreezePlan = (_, _) =>
+        {
+            if (freezeCount++ == 0)
+            {
+                return Task.FromResult(healthy);
+            }
+
+            timeoutSource.OnTimeout = () => ui.IsPoisoned = true;
+            return Task.FromResult(timeout);
+        };
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(root));
+
+        await coordinator.FreezeAsync(ScreenPoint);
+        var committedObservation = coordinator.State.SelectionObservation;
+        var committedObject = coordinator.State.ManagedObject;
+        await coordinator.FreezeAsync(ScreenPoint);
+
+        Assert.True(timeoutSource.TimedOut);
+        Assert.True(timeoutSource.ExecutorWasPoisoned);
+        Assert.Equal(ObjectSpySelectionState.Quarantined, coordinator.State.SelectionState);
+        Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
+        Assert.Same(committedObservation, coordinator.State.SelectionObservation);
+        Assert.Same(committedObject, coordinator.State.ManagedObject);
+        Assert.Equal(1, timeoutSource.DisposeCount);
+        Assert.Equal(1, inspection.DescribeCalls);
+    }
+
+    [Fact]
     public async Task A_captured_non_exact_replacement_commits_without_retaining_old_clr_state()
     {
         var root = CreateObject("root", "Root");
@@ -244,6 +285,205 @@ public sealed class ObjectSpyCoordinatorTests
         Assert.Equal(ObjectSpySelectionState.Frozen, coordinator.State.SelectionState);
         Assert.Null(coordinator.State.PreviewObservation);
         Assert.Same(committedObservation, coordinator.State.SelectionObservation);
+    }
+
+    [Fact]
+    public async Task Preview_abandon_restores_stale_state_and_retained_facts()
+    {
+        var inspection = new FakeInspectionPort();
+        var ui = new FakeUiSession(ProcessId)
+        {
+            FreezePlan = (_, _) => Task.FromResult(CreateFrozenSelection("stale", available: false))
+        };
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(CreateObject("root", "Root")));
+        await coordinator.FreezeAsync(ScreenPoint);
+
+        var committedObservation = coordinator.State.SelectionObservation;
+        var committedError = coordinator.State.Error;
+        var previewStarted = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var previewResult = new TaskCompletionSource<FlaUiSelectionObservation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ui.PreviewPlan = async (_, cancellationToken) =>
+        {
+            previewStarted.TrySetResult(null);
+            return await previewResult.Task.WaitAsync(cancellationToken);
+        };
+
+        var previewTask = coordinator.PreviewAsync(ScreenPoint);
+        await previewStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        coordinator.AbandonPreview();
+
+        Assert.Equal(ObjectSpySelectionState.Stale, coordinator.State.SelectionState);
+        Assert.Equal(committedError, coordinator.State.Error);
+        Assert.Same(committedObservation, coordinator.State.SelectionObservation);
+        Assert.Null(coordinator.State.PreviewObservation);
+
+        previewResult.SetResult(CreateObservation("late-preview", available: true));
+        await previewTask;
+
+        Assert.Equal(ObjectSpySelectionState.Stale, coordinator.State.SelectionState);
+        Assert.Equal(committedError, coordinator.State.Error);
+        Assert.Same(committedObservation, coordinator.State.SelectionObservation);
+        Assert.Null(coordinator.State.PreviewObservation);
+    }
+
+    [Fact]
+    public async Task Preview_abandon_restores_quarantine_and_retained_clr_state()
+    {
+        var root = CreateObject("root", "Root");
+        var inspection = new FakeInspectionPort();
+        inspection.SetObject(root, Array.Empty<MemberDescriptorDto>(), Array.Empty<MemberReadResultDto>());
+        var healthy = CreateFrozenSelection("healthy", available: true);
+        var failed = CreateFrozenSelection("failed", available: true);
+        var failedSource = (FakeExternalSource)failed.Source;
+        failedSource.CaptureResult = CreateCaptureFailureEvidence(failedSource.Evidence.Source);
+        var ui = new FakeUiSession(ProcessId);
+        var freezeCount = 0;
+        ui.FreezePlan = (_, _) =>
+        {
+            if (freezeCount++ == 0)
+            {
+                return Task.FromResult(healthy);
+            }
+
+            ui.IsPoisoned = true;
+            return Task.FromResult(failed);
+        };
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(root));
+
+        await coordinator.FreezeAsync(ScreenPoint);
+        await coordinator.FreezeAsync(ScreenPoint);
+        var committedObservation = coordinator.State.SelectionObservation;
+        var committedObject = coordinator.State.ManagedObject;
+        var committedDescription = coordinator.State.Description;
+        var committedEvidence = coordinator.State.ExternalEvidence;
+        var committedCorrelation = coordinator.State.Correlation;
+        var committedError = coordinator.State.Error;
+
+        ui.PreviewPlan = (_, _) => Task.FromResult(CreateObservation("preview", available: true));
+        await coordinator.PreviewAsync(ScreenPoint);
+        coordinator.AbandonPreview();
+
+        Assert.Equal(ObjectSpySelectionState.Quarantined, coordinator.State.SelectionState);
+        Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
+        Assert.Equal(committedError, coordinator.State.Error);
+        Assert.Same(committedObservation, coordinator.State.SelectionObservation);
+        Assert.Same(committedObject, coordinator.State.ManagedObject);
+        Assert.Same(committedDescription, coordinator.State.Description);
+        Assert.Same(committedEvidence, coordinator.State.ExternalEvidence);
+        Assert.Same(committedCorrelation, coordinator.State.Correlation);
+        Assert.Null(coordinator.State.PreviewObservation);
+    }
+
+    [Fact]
+    public async Task Preview_abandon_restores_a_committed_error_state()
+    {
+        var root = CreateObject("root", "Root");
+        var inspection = new FakeInspectionPort();
+        inspection.SetObject(root, Array.Empty<MemberDescriptorDto>(), Array.Empty<MemberReadResultDto>());
+        var healthy = CreateFrozenSelection("healthy", available: true);
+        var failed = CreateFrozenSelection("failed", available: true);
+        var failedSource = (FakeExternalSource)failed.Source;
+        failedSource.CaptureResult = CreateCaptureFailureEvidence(failedSource.Evidence.Source);
+        var ui = new FakeUiSession(ProcessId);
+        var freezeCount = 0;
+        ui.FreezePlan = (_, _) => Task.FromResult(freezeCount++ == 0 ? healthy : failed);
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(root));
+
+        await coordinator.FreezeAsync(ScreenPoint);
+        await coordinator.FreezeAsync(ScreenPoint);
+        var committedObservation = coordinator.State.SelectionObservation;
+        var committedObject = coordinator.State.ManagedObject;
+        var committedError = coordinator.State.Error;
+        Assert.Equal(ObjectSpySelectionState.Error, coordinator.State.SelectionState);
+
+        ui.PreviewPlan = (_, _) => Task.FromResult(CreateObservation("preview", available: true));
+        await coordinator.PreviewAsync(ScreenPoint);
+        coordinator.AbandonPreview();
+
+        Assert.Equal(ObjectSpySelectionState.Error, coordinator.State.SelectionState);
+        Assert.Equal(committedError, coordinator.State.Error);
+        Assert.Same(committedObservation, coordinator.State.SelectionObservation);
+        Assert.Same(committedObject, coordinator.State.ManagedObject);
+        Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
+    }
+
+    [Fact]
+    public async Task A_late_capture_candidate_cannot_overwrite_a_newer_commit()
+    {
+        var root = CreateObject("root", "Root");
+        var inspection = new FakeInspectionPort();
+        inspection.SetObject(root, Array.Empty<MemberDescriptorDto>(), Array.Empty<MemberReadResultDto>());
+        var healthy = CreateFrozenSelection("healthy", available: true);
+        var delayedLifetime = new TrackingLifetime();
+        var delayed = CreateFrozenSelection("delayed", available: true, delayedLifetime);
+        var delayedSource = (FakeExternalSource)delayed.Source;
+        var captureStarted = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var captureRelease = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        delayedSource.CaptureStarted = captureStarted;
+        delayedSource.CaptureGate = captureRelease;
+        var newer = CreateFrozenSelection("newer", available: true);
+        var ui = new FakeUiSession(ProcessId);
+        var freezeCount = 0;
+        ui.FreezePlan = (_, _) => Task.FromResult(freezeCount++ switch
+        {
+            0 => healthy,
+            1 => delayed,
+            _ => newer
+        });
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(root));
+
+        await coordinator.FreezeAsync(ScreenPoint);
+        var delayedFreeze = coordinator.FreezeAsync(ScreenPoint);
+        await captureStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await coordinator.FreezeAsync(ScreenPoint);
+        Assert.Equal("newer", coordinator.State.SelectionObservation!.Name);
+
+        captureRelease.SetResult(null);
+        await delayedFreeze;
+
+        Assert.Equal("newer", coordinator.State.SelectionObservation!.Name);
+        Assert.Equal(1, delayedLifetime.DisposeCount);
+        Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
+    }
+
+    [Fact]
+    public async Task A_late_correlation_candidate_cannot_overwrite_a_newer_commit()
+    {
+        var root = CreateObject("root", "Root");
+        var inspection = new FakeInspectionPort();
+        inspection.SetObject(root, Array.Empty<MemberDescriptorDto>(), Array.Empty<MemberReadResultDto>());
+        var healthy = CreateFrozenSelection("healthy", available: true);
+        var delayedLifetime = new TrackingLifetime();
+        var delayed = CreateFrozenSelection("delayed", available: true, delayedLifetime);
+        var delayedSource = (FakeExternalSource)delayed.Source;
+        var equalityStarted = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var equalityRelease = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        delayedSource.EqualityStarted = equalityStarted;
+        delayedSource.EqualityGateOnCall = 1;
+        delayedSource.EqualityGate = equalityRelease;
+        var newer = CreateFrozenSelection("newer", available: true);
+        var ui = new FakeUiSession(ProcessId);
+        var freezeCount = 0;
+        ui.FreezePlan = (_, _) => Task.FromResult(freezeCount++ switch
+        {
+            0 => healthy,
+            1 => delayed,
+            _ => newer
+        });
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(root));
+
+        await coordinator.FreezeAsync(ScreenPoint);
+        var delayedFreeze = coordinator.FreezeAsync(ScreenPoint);
+        await equalityStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await coordinator.FreezeAsync(ScreenPoint);
+        Assert.Equal("newer", coordinator.State.SelectionObservation!.Name);
+
+        equalityRelease.SetResult(null);
+        await delayedFreeze;
+
+        Assert.Equal("newer", coordinator.State.SelectionObservation!.Name);
+        Assert.Equal(1, delayedLifetime.DisposeCount);
+        Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
     }
 
     [Fact]
@@ -807,6 +1047,88 @@ public sealed class ObjectSpyCoordinatorTests
         }
     }
 
+    private sealed class ExecutorTimeoutSource : IExternalUiaObservationPort, IAsyncDisposable
+    {
+        private readonly FlaUiMtaExecutor _executor;
+        private readonly TaskCompletionSource<object?> _release = NewSignal();
+        private readonly TaskCompletionSource<object?> _workerExited = NewSignal();
+        private int _disposed;
+
+        public ExecutorTimeoutSource(string name)
+        {
+            Evidence = CreateExternalEvidence(name, available: true);
+            _executor = new FlaUiMtaExecutor(() => _workerExited.TrySetResult(null));
+        }
+
+        public ExternalUiaEvidenceDto Evidence { get; }
+
+        public Action? OnTimeout { get; set; }
+
+        public bool TimedOut { get; private set; }
+
+        public bool ExecutorWasPoisoned => _executor.IsPoisoned;
+
+        public int DisposeCount { get; private set; }
+
+        public async Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await _executor
+                    .InvokeWithTimeoutAsync(
+                        () =>
+                        {
+                            Started.TrySetResult(null);
+                            _release.Task.GetAwaiter().GetResult();
+                            return Evidence;
+                        },
+                        TimeSpan.FromMilliseconds(40),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (FlaUiSessionException)
+            {
+                TimedOut = true;
+                OnTimeout?.Invoke();
+                return new ExternalUiaEvidenceDto(
+                    Evidence.Source,
+                    Evidence.ProcessId,
+                    observedHwnd: null,
+                    Evidence.EvidenceFacts,
+                    new[] { new CorrelationLimitationDto("ExternalCaptureUnavailable") },
+                    new OperationErrorDto(OperationErrorCode.TargetOperationFailed, "UIA capture timed out."));
+            }
+        }
+
+        public Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
+            ExternalUiaCaptureRefDto capture,
+            ulong hwnd,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(CreateEqualityEvidence(Evidence.Source, hwnd));
+        }
+
+        public TaskCompletionSource<object?> Started { get; } = NewSignal();
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            DisposeCount++;
+            _executor.Dispose();
+            _release.TrySetResult(null);
+            await _workerExited.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+
+        private static TaskCompletionSource<object?> NewSignal()
+        {
+            return new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
     private sealed class FakeExternalSource : IExternalUiaObservationPort
     {
         public FakeExternalSource(ExternalUiaEvidenceDto evidence)
@@ -822,6 +1144,10 @@ public sealed class ObjectSpyCoordinatorTests
 
         public ExternalUiaEvidenceDto? CaptureResult { get; set; }
 
+        public TaskCompletionSource<object?>? CaptureStarted { get; set; }
+
+        public TaskCompletionSource<object?>? CaptureGate { get; set; }
+
         public int EqualityCallCount { get; private set; }
 
         public int? EqualityFailureOnCall { get; set; }
@@ -830,36 +1156,54 @@ public sealed class ObjectSpyCoordinatorTests
 
         public Action? OnEqualityFailure { get; set; }
 
-        public Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken)
+        public TaskCompletionSource<object?>? EqualityStarted { get; set; }
+
+        public int? EqualityGateOnCall { get; set; }
+
+        public TaskCompletionSource<object?>? EqualityGate { get; set; }
+
+        public async Task<ExternalUiaEvidenceDto> CaptureAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (CaptureGate is not null)
+            {
+                CaptureStarted?.TrySetResult(null);
+                await CaptureGate.Task.WaitAsync(cancellationToken);
+            }
+
             if (CaptureException is not null)
             {
                 throw CaptureException;
             }
 
-            return Task.FromResult(CaptureResult ?? Evidence);
+            return CaptureResult ?? Evidence;
         }
 
-        public Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
+        public async Task<ExternalUiaEqualityEvidenceDto> CompareWithHwndAsync(
             ExternalUiaCaptureRefDto capture,
             ulong hwnd,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             EqualityCallCount++;
+            if (EqualityGateOnCall == EqualityCallCount && EqualityGate is not null)
+            {
+                EqualityStarted?.TrySetResult(null);
+                await EqualityGate.Task.WaitAsync(cancellationToken);
+            }
+
             if (EqualityFailureOnCall == EqualityCallCount)
             {
                 OnEqualityFailure?.Invoke();
                 if (EqualityFailureResult is not null)
                 {
-                    return Task.FromResult(EqualityFailureResult);
+                    return EqualityFailureResult;
                 }
 
                 throw new FlaUiSessionException("UIA equality timed out.");
             }
 
-            return Task.FromResult(EqualityEvidence.Dequeue());
+            return EqualityEvidence.Dequeue();
         }
     }
 
