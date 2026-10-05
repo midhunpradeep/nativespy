@@ -164,6 +164,40 @@ public sealed class AgentHostRequestValidationTests
     }
 
     [Fact]
+    public async Task Malformed_clr_payload_is_nonterminal_and_the_session_survives()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var options = CreateOptions();
+        await using var host = new AgentHost(options, new ClrPayloadValidationCompositionFactory());
+        await host.StartAsync();
+        await using var client = await NamedPipeClientSession.ConnectAsync(
+            host.BootstrapDescriptor,
+            options.TargetProcessIdentity,
+            cancellationToken: CancellationToken.None);
+
+        using var malformed = JsonDocument.Parse("{\"object\":{\"handle\":{\"sessionId\":\"session\"}}}");
+        var invalidResponse = await client.SendRequestAsync(
+            ProtocolOperationNames.DescribeObject,
+            malformed.RootElement,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal(ProtocolJsonCodec.ProtocolErrorStatus, invalidResponse.ResultStatus);
+        Assert.Equal(nameof(ProtocolErrorCode.InvalidRequest), invalidResponse.ProtocolError?.Code);
+        Assert.Equal(AgentHostState.Active, host.State);
+
+        using var valid = JsonDocument.Parse("{\"object\":{\"handle\":{\"sessionId\":\"session\",\"handleId\":\"object\",\"generation\":1,\"kind\":\"ClrObject\",\"boundaryId\":\"boundary\"},\"boundaryId\":\"boundary\"}}");
+        var validResponse = await client.SendRequestAsync(
+            ProtocolOperationNames.DescribeObject,
+            valid.RootElement,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal(ProtocolJsonCodec.SuccessStatus, validResponse.ResultStatus);
+        Assert.Equal(AgentHostState.Active, host.State);
+    }
+
+    [Fact]
     public async Task Unknown_operation_is_a_nonterminal_protocol_error()
     {
         if (!OperatingSystem.IsWindows())
@@ -232,6 +266,45 @@ public sealed class AgentHostRequestValidationTests
         {
             await connection.DisposeAsync();
             throw;
+        }
+    }
+
+    private sealed class ClrPayloadValidationCompositionFactory : IAgentHostCompositionFactory
+    {
+        public IReadOnlyList<string> DeclaredOperationNames { get; } = new[]
+        {
+            ProtocolOperationNames.DescribeObject
+        };
+
+        public IAgentHostComposition Create(
+            IManagedObjectReferenceService identityService,
+            HostSessionContext context)
+        {
+            return new ClrPayloadValidationComposition();
+        }
+    }
+
+    private sealed class ClrPayloadValidationComposition : IAgentHostComposition
+    {
+        public IReadOnlyList<IAgentOperationHandler> Handlers { get; } = new[]
+        {
+            new ClrPayloadValidationHandler()
+        };
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ClrPayloadValidationHandler : IAgentOperationHandler
+    {
+        public string OperationName => ProtocolOperationNames.DescribeObject;
+
+        public Task<AgentHandlerResult> HandleAsync(
+            AgentRequestContext context,
+            JsonElement payload,
+            CancellationToken cancellationToken)
+        {
+            _ = ClrInspectionJsonCodec.ReadDescribeObjectPayload(payload);
+            return Task.FromResult(AgentHandlerResult.Success(payload));
         }
     }
 

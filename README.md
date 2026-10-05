@@ -44,6 +44,18 @@ This repository contains **Iteration 4a — compact ObjectSpy Lite over the auth
 
 The supported path remains UIA3 `UiaToNative` correlation under explicit `Conservative` policy. Each resolution receives a fresh capture ID while retaining the source observation ID; Client normalization, not FlaUI or Agent, assigns proof phases and certainty. It returns `Exact + SameManagedElement` only after initial and revalidated UIA equality, current-HWND WinForms lookup, and CLR reference equality. Only `CorrelationStatus.Exact` exposes CLR identity to ObjectSpy; all other statuses retain evidence and lock CLR inspection.
 
+The I4a corrective pass keeps preview observations separate from committed frozen facts, commits a new freeze only after UIA acquisition succeeds, preserves the last healthy CLR graph when a later UIA operation is quarantined, and rejects late CLR navigation/property/page results by a separate navigation epoch. The CLR wire union now validates canonical integer ranges, exact floating-point bit widths, legal decimal flags, UTF-16 truncation boundaries, shallow value-type nesting, field counts, and payload size. Malformed CLR payloads are reported as non-terminal invalid requests; real handler failures remain terminal internal failures.
+
+## Running the ObjectSpy client manually
+
+From this directory on an interactive x64 Windows desktop:
+
+```text
+dotnet run --project src/NativeSpy.ObjectSpy.App/NativeSpy.ObjectSpy.App.csproj
+```
+
+The WPF client starts the controlled WinForms target, attaches UIA3, and displays `Connected to PID ...` when the authenticated session is ready. Activate the finder, move the physical cursor over the synthetic target's `NativeSpyTestButton`, and confirm that the click-through outline follows the candidate. Freeze the selection, confirm `Exact` correlation and the detached CLR member list, use `Read` for a property, use `Follow` on an object reference, and use `Back` to restore the previous object. Stop the finder or close the window to release the target, pipe session, UIA worker, and overlay.
+
 ## I2 identity model
 
 A `ClrAgentSession` owns one session-local identity namespace. Registration uses reference identity (`ReferenceEquals` semantics), weakly indexes target objects, and returns an opaque `HandleRefDto` plus production `TypeIdentityDto`. Handle records retain only a `WeakReference<object>` and a lightweight tombstone. A collected object is never rebound; its exact historical handle returns `ObjectCollected`.

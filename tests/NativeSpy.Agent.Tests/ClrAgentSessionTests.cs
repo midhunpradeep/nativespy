@@ -238,6 +238,19 @@ public sealed class ClrAgentSessionTests
     }
 
     [Fact]
+    public void Closing_a_session_allows_collectible_load_contexts_and_types_to_be_collected()
+    {
+        using var session = new ClrAgentSession();
+        var probe = RegisterCollectibleTarget(session);
+
+        session.Close();
+
+        Assert.True(WaitForCollection(probe.LoadContext));
+        Assert.True(WaitForCollection(probe.Type));
+        Assert.True(WaitForCollection(probe.Target));
+    }
+
+    [Fact]
     public async Task Concurrent_registration_and_acquisition_are_identity_safe()
     {
         using var session = new ClrAgentSession();
@@ -393,6 +406,24 @@ public sealed class ClrAgentSessionTests
             ManagedObjectRegistrationResult.Failure(null!));
         Assert.Throws<ArgumentNullException>(() =>
             ManagedObjectAcquisitionResult.Failure(null!));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference LoadContext, WeakReference Type, WeakReference Target) RegisterCollectibleTarget(
+        ClrAgentSession session)
+    {
+        var loadContext = new AssemblyLoadContext("agent-collectible-proof", isCollectible: true);
+        var assembly = loadContext.LoadFromAssemblyPath(typeof(CrossLoadContextFixture).Assembly.Location);
+        var type = assembly.GetType(typeof(CrossLoadContextFixture).FullName!, throwOnError: true)!;
+        var target = Activator.CreateInstance(type)!;
+        var reference = session.Register(target);
+        Assert.True(reference.IsSuccess, reference.Error?.Message);
+
+        var loadContextReference = new WeakReference(loadContext);
+        var typeReference = new WeakReference(type);
+        var targetReference = new WeakReference(target);
+        loadContext.Unload();
+        return (loadContextReference, typeReference, targetReference);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

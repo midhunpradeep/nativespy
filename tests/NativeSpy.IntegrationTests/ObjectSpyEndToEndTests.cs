@@ -29,15 +29,17 @@ public sealed class ObjectSpyEndToEndTests
             new IntPtr(unchecked((long)capture.ObservedHwnd!.Value)),
             2);
         Assert.NotEqual(IntPtr.Zero, rootHwnd);
-        Assert.True(GetWindowRect(rootHwnd, out var nativeRect));
+        _ = SetWindowPos(rootHwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0043);
+        _ = SetForegroundWindow(rootHwnd);
+        var targetPoint = new NativePoint { X = 10, Y = 10 };
+        Assert.True(ClientToScreen(rootHwnd, ref targetPoint));
 
         await using var coordinator = new ObjectSpyCoordinator(
             target.ProcessIdentity,
             flaUi,
             target.Session,
             target.Session);
-        await coordinator.FreezeAsync(
-            new Point(nativeRect.Left + 24, nativeRect.Top + 80));
+        await coordinator.FreezeAsync(new Point(targetPoint.X, targetPoint.Y));
 
         Assert.Equal(ObjectSpySelectionState.Frozen, coordinator.State.SelectionState);
         Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
@@ -76,16 +78,27 @@ public sealed class ObjectSpyEndToEndTests
     }
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rectangle);
+    private static extern bool SetWindowPos(
+        IntPtr hwnd,
+        IntPtr hwndInsertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ClientToScreen(IntPtr hwnd, ref NativePoint point);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 
-    private struct NativeRect
+    private struct NativePoint
     {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
+        public int X;
+        public int Y;
     }
 }

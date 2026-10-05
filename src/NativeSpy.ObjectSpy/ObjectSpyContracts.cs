@@ -1,4 +1,5 @@
 using System.Drawing;
+using NativeSpy.Client.Correlation;
 using NativeSpy.FlaUI;
 using NativeSpy.Protocol.Clr;
 using NativeSpy.Protocol.Common;
@@ -55,6 +56,45 @@ public sealed class NullObjectSpyOverlay : IObjectSpyOverlay
     }
 }
 
+internal interface IObjectSpyUiSession
+{
+    int ProcessId { get; }
+
+    bool IsPoisoned { get; }
+
+    Task<FlaUiSelectionObservation> PreviewFromPointAsync(
+        Point screenPoint,
+        CancellationToken cancellationToken);
+
+    Task<ObjectSpyFrozenSelection> FreezeFromPointAsync(
+        Point screenPoint,
+        CancellationToken cancellationToken);
+}
+
+internal sealed class ObjectSpyFrozenSelection : IAsyncDisposable
+{
+    private readonly IAsyncDisposable? _lifetime;
+
+    public ObjectSpyFrozenSelection(
+        IExternalUiaObservationPort source,
+        FlaUiSelectionObservation observation,
+        IAsyncDisposable? lifetime = null)
+    {
+        Source = source ?? throw new ArgumentNullException(nameof(source));
+        Observation = observation ?? throw new ArgumentNullException(nameof(observation));
+        _lifetime = lifetime;
+    }
+
+    public IExternalUiaObservationPort Source { get; }
+
+    public FlaUiSelectionObservation Observation { get; }
+
+    public ValueTask DisposeAsync()
+    {
+        return _lifetime?.DisposeAsync() ?? ValueTask.CompletedTask;
+    }
+}
+
 public sealed class ObjectSpyViewState
 {
     public ObjectSpySelectionState SelectionState { get; internal set; }
@@ -64,6 +104,8 @@ public sealed class ObjectSpyViewState
     public long Generation { get; internal set; }
 
     public FlaUiSelectionObservation? SelectionObservation { get; internal set; }
+
+    public FlaUiSelectionObservation? PreviewObservation { get; internal set; }
 
     public ExternalUiaEvidenceDto? ExternalEvidence { get; internal set; }
 

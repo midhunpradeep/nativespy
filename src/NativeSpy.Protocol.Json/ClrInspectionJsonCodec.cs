@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using NativeSpy.Protocol.Clr;
@@ -26,8 +27,13 @@ public static class ClrInspectionJsonCodec
 
     public static DescribeObjectRequestDto ReadDescribeObjectPayload(JsonElement payload)
     {
-        var root = ReadObject(payload, "describe-object payload", "object");
-        return new DescribeObjectRequestDto(ReadManagedObject(RequiredObject(root, "object")));
+        return ReadContract(
+            () =>
+            {
+                var root = ReadObject(payload, "describe-object payload", "object");
+                return new DescribeObjectRequestDto(ReadManagedObject(RequiredObject(root, "object")));
+            },
+            "describe-object payload");
     }
 
     public static JsonElement SerializeDescribeObjectResponse(DescribeObjectResponseDto response)
@@ -50,7 +56,7 @@ public static class ClrInspectionJsonCodec
         {
             return new DescribeObjectResponseDto(ReadManagedObject(RequiredObject(root, "object")));
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (IsContractFailure(exception))
         {
             throw new ProtocolJsonException("The describe-object response contains invalid CLR identity data.", exception);
         }
@@ -74,12 +80,17 @@ public static class ClrInspectionJsonCodec
 
     public static ListMembersRequestDto ReadListMembersPayload(JsonElement payload)
     {
-        var root = ReadObject(payload, "list-members payload", "object", "pageSize", "filter", "continuationToken");
-        return new ListMembersRequestDto(
-            ReadManagedObject(RequiredObject(root, "object")),
-            RequiredPositiveInt(root, "pageSize"),
-            ParseEnum<ClrMemberKindFilter>(RequiredString(root, "filter"), "filter"),
-            OptionalString(root, "continuationToken"));
+        return ReadContract(
+            () =>
+            {
+                var root = ReadObject(payload, "list-members payload", "object", "pageSize", "filter", "continuationToken");
+                return new ListMembersRequestDto(
+                    ReadManagedObject(RequiredObject(root, "object")),
+                    RequiredPositiveInt(root, "pageSize"),
+                    ParseEnum<ClrMemberKindFilter>(RequiredString(root, "filter"), "filter"),
+                    OptionalString(root, "continuationToken"));
+            },
+            "list-members payload");
     }
 
     public static JsonElement SerializeListMembersResponse(ListMembersResponseDto response)
@@ -111,7 +122,7 @@ public static class ClrInspectionJsonCodec
                 wire.Members.Select(FromWire),
                 wire.NextContinuationToken);
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (IsContractFailure(exception))
         {
             throw new ProtocolJsonException("The list-members response contains invalid CLR member data.", exception);
         }
@@ -133,16 +144,21 @@ public static class ClrInspectionJsonCodec
 
     public static ReadFieldValuesRequestDto ReadReadFieldValuesPayload(JsonElement payload)
     {
-        var root = ReadObject(payload, "read-field-values payload", "object", "members");
-        var wire = Deserialize<ReadFieldValuesRequestWire>(root, "read-field-values payload");
-        if (wire.Object is null || wire.Members is null)
-        {
-            throw new ProtocolJsonException("The read-field-values payload is incomplete.");
-        }
+        return ReadContract(
+            () =>
+            {
+                var root = ReadObject(payload, "read-field-values payload", "object", "members");
+                var wire = Deserialize<ReadFieldValuesRequestWire>(root, "read-field-values payload");
+                if (wire.Object is null || wire.Members is null)
+                {
+                    throw new ProtocolJsonException("The read-field-values payload is incomplete.");
+                }
 
-        return new ReadFieldValuesRequestDto(
-            ReadManagedObject(wire.Object),
-            wire.Members.Select(FromWire));
+                return new ReadFieldValuesRequestDto(
+                    ReadManagedObject(wire.Object),
+                    wire.Members.Select(FromWire));
+            },
+            "read-field-values payload");
     }
 
     public static JsonElement SerializeReadFieldValuesResponse(ReadFieldValuesResponseDto response)
@@ -171,7 +187,7 @@ public static class ClrInspectionJsonCodec
         {
             return new ReadFieldValuesResponseDto(wire.Results.Select(FromWire));
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (IsContractFailure(exception))
         {
             throw new ProtocolJsonException("The read-field-values response contains invalid CLR value data.", exception);
         }
@@ -193,16 +209,21 @@ public static class ClrInspectionJsonCodec
 
     public static ReadPropertyValueRequestDto ReadReadPropertyValuePayload(JsonElement payload)
     {
-        var root = ReadObject(payload, "read-property-value payload", "object", "member");
-        var wire = Deserialize<ReadPropertyValueRequestWire>(root, "read-property-value payload");
-        if (wire.Object is null || wire.Member is null)
-        {
-            throw new ProtocolJsonException("The read-property-value payload is incomplete.");
-        }
+        return ReadContract(
+            () =>
+            {
+                var root = ReadObject(payload, "read-property-value payload", "object", "member");
+                var wire = Deserialize<ReadPropertyValueRequestWire>(root, "read-property-value payload");
+                if (wire.Object is null || wire.Member is null)
+                {
+                    throw new ProtocolJsonException("The read-property-value payload is incomplete.");
+                }
 
-        return new ReadPropertyValueRequestDto(
-            ReadManagedObject(wire.Object),
-            FromWire(wire.Member));
+                return new ReadPropertyValueRequestDto(
+                    ReadManagedObject(wire.Object),
+                    FromWire(wire.Member));
+            },
+            "read-property-value payload");
     }
 
     public static JsonElement SerializeReadPropertyValueResponse(ReadPropertyValueResponseDto response)
@@ -228,7 +249,7 @@ public static class ClrInspectionJsonCodec
         {
             return new ReadPropertyValueResponseDto(FromWire(wire.Result));
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (IsContractFailure(exception))
         {
             throw new ProtocolJsonException("The read-property-value response contains invalid CLR value data.", exception);
         }
@@ -363,7 +384,23 @@ public static class ClrInspectionJsonCodec
                 RequiredText(wire.FieldType.TypeId, "structField.fieldType.typeId"),
                 RequiredText(wire.FieldType.BoundaryId, "structField.fieldType.boundaryId")),
             ParseEnum<ClrStructFieldOutcome>(wire.Outcome, "structField.outcome"),
-            wire.Value is null ? null : FromWire(wire.Value));
+            wire.Value is null ? null : FromWire(wire.Value, nestedValueType: true));
+    }
+
+    private static void ValidateValueTypeNesting(ClrValueWire wire, bool nestedValueType)
+    {
+        var fields = wire.StructFields ?? Array.Empty<StructFieldWire>();
+        if (fields.Length > ClrInspectionContractLimits.MaxStructFields)
+        {
+            throw new ProtocolJsonException("A value type exceeds the maximum field count.");
+        }
+
+        if (nestedValueType
+            && (!wire.StructNotExpanded || wire.StructTruncated || fields.Length != 0))
+        {
+            throw new ProtocolJsonException(
+                "Nested value types must be type-only and must not contain expanded fields.");
+        }
     }
 
     private static ClrValueWire ToWire(ClrValueDto value)
@@ -443,7 +480,17 @@ public static class ClrInspectionJsonCodec
 
     private static ClrValueDto FromWire(ClrValueWire wire)
     {
+        return FromWire(wire, nestedValueType: false);
+    }
+
+    private static ClrValueDto FromWire(ClrValueWire wire, bool nestedValueType)
+    {
         var kind = ParseEnum<ClrValueKind>(wire.Kind, "kind");
+        if (kind == ClrValueKind.ValueType)
+        {
+            ValidateValueTypeNesting(wire, nestedValueType);
+        }
+
         return kind switch
         {
             ClrValueKind.Null => ClrValueDto.Null(),
@@ -502,6 +549,30 @@ public static class ClrInspectionJsonCodec
         {
             throw new ProtocolJsonException("The CLR inspection value could not be serialized.", exception);
         }
+    }
+
+    private static T ReadContract<T>(Func<T> reader, string description)
+    {
+        try
+        {
+            return reader();
+        }
+        catch (ProtocolJsonException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsContractFailure(exception))
+        {
+            throw new ProtocolJsonException($"The {description} contains invalid contract data.", exception);
+        }
+    }
+
+    private static bool IsContractFailure(Exception exception)
+    {
+        return exception is ArgumentException
+            or InvalidOperationException
+            or OverflowException
+            or FormatException;
     }
 
     private static T Deserialize<T>(JsonElement root, string description)
@@ -658,14 +729,21 @@ public static class ClrInspectionJsonCodec
 
     private static void ValidateClrValueShapes(JsonElement element)
     {
+        ValidateClrValueShapes(element, nestedValueType: false);
+    }
+
+    private static void ValidateClrValueShapes(JsonElement element, bool nestedValueType)
+    {
         if (element.ValueKind == JsonValueKind.Object)
         {
+            ClrValueKind? kind = null;
             if (element.TryGetProperty("kind", out var kindElement)
                 && kindElement.ValueKind == JsonValueKind.String
-                && Enum.TryParse<ClrValueKind>(kindElement.GetString(), ignoreCase: false, out var kind)
-                && Enum.IsDefined(typeof(ClrValueKind), kind))
+                && Enum.TryParse<ClrValueKind>(kindElement.GetString(), ignoreCase: false, out var parsedKind)
+                && Enum.IsDefined(typeof(ClrValueKind), parsedKind))
             {
-                var allowed = kind switch
+                kind = parsedKind;
+                var allowed = parsedKind switch
                 {
                     ClrValueKind.Null => new[] { "kind" },
                     ClrValueKind.Boolean => new[] { "kind", "booleanValue" },
@@ -685,19 +763,85 @@ public static class ClrInspectionJsonCodec
                     _ => throw new ProtocolJsonException("The CLR value kind is not supported.")
                 };
                 EnsureOnlyProperties(element, "CLR value", allowed);
+
+                if (parsedKind == ClrValueKind.ValueType)
+                {
+                    ValidateValueTypeElement(element, nestedValueType);
+                }
             }
 
             foreach (var property in element.EnumerateObject())
             {
-                ValidateClrValueShapes(property.Value);
+                if (kind == ClrValueKind.ValueType
+                    && property.Name == "structFields"
+                    && property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var field in property.Value.EnumerateArray())
+                    {
+                        if (field.ValueKind == JsonValueKind.Object
+                            && field.TryGetProperty("value", out var fieldValue))
+                        {
+                            ValidateClrValueShapes(fieldValue, nestedValueType: true);
+                        }
+                        else
+                        {
+                            ValidateClrValueShapes(field, nestedValueType: false);
+                        }
+                    }
+
+                    continue;
+                }
+
+                ValidateClrValueShapes(property.Value, nestedValueType: false);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
             {
-                ValidateClrValueShapes(item);
+                ValidateClrValueShapes(item, nestedValueType: false);
             }
+        }
+    }
+
+    private static void ValidateValueTypeElement(JsonElement element, bool nestedValueType)
+    {
+        if (Encoding.UTF8.GetByteCount(element.GetRawText()) > ClrInspectionContractLimits.MaxStructPayloadBytes)
+        {
+            throw new ProtocolJsonException("A value type exceeds the maximum payload size.");
+        }
+
+        var fields = Array.Empty<JsonElement>();
+        if (element.TryGetProperty("structFields", out var fieldsElement))
+        {
+            if (fieldsElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new ProtocolJsonException("A value type structFields property must be an array.");
+            }
+
+            fields = fieldsElement.EnumerateArray().ToArray();
+        }
+
+        if (fields.Length > ClrInspectionContractLimits.MaxStructFields)
+        {
+            throw new ProtocolJsonException("A value type exceeds the maximum field count.");
+        }
+
+        var notExpanded = element.TryGetProperty("structNotExpanded", out var notExpandedElement)
+            && notExpandedElement.ValueKind == JsonValueKind.True;
+        var truncated = element.TryGetProperty("structTruncated", out var truncatedElement)
+            && truncatedElement.ValueKind == JsonValueKind.True;
+        if (nestedValueType
+            && (!notExpanded || truncated || fields.Length != 0))
+        {
+            throw new ProtocolJsonException(
+                "Nested value types must be type-only and must not contain expanded fields.");
+        }
+
+        if (notExpanded && fields.Length != 0)
+        {
+            throw new ProtocolJsonException(
+                "A non-expanded value type cannot contain expanded fields.");
         }
     }
 

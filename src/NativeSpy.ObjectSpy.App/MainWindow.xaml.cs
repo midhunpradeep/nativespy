@@ -152,7 +152,7 @@ public partial class MainWindow : Window
         }
 
         StateText.Text = $"Selection: {state.SelectionState}; CLR: {state.ClrState}";
-        var observation = state.SelectionObservation;
+        var observation = state.PreviewObservation ?? state.SelectionObservation;
         NameText.Text = observation?.Name ?? "—";
         ControlTypeText.Text = observation?.ControlType ?? "—";
         AutomationIdText.Text = observation?.AutomationId ?? "—";

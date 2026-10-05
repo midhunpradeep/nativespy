@@ -57,6 +57,11 @@ internal sealed class WpfSelectionOverlay : IObjectSpyOverlay
             return;
         }
 
+        if (generation < _generation)
+        {
+            return;
+        }
+
         _generation = generation;
         var bounds = geometry.Bounds;
         if (!_window.IsVisible)

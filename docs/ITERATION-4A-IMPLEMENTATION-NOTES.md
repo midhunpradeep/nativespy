@@ -43,13 +43,13 @@ The Host resolves a getter target to direct execution, one registered adapter, r
 
 A timeout poisons and quarantines the FlaUI session. Queued UIA work is failed rather than drained after quarantine, and automation objects are not disposed from the wrong thread. The bounded quarantine budget prevents unbounded abandoned workers.
 
-`ObjectSpyCoordinator` owns generation checks, preview/freeze state, Exact-only CLR loading, bounded field batches, lazy property reads, member paging, and explicit object-reference back navigation. Ambiguous, high-confidence, no-direct-mapping, and unresolved correlation states retain UIA/correlation facts but do not load CLR identity.
+`ObjectSpyCoordinator` owns transactional freeze candidates, separate preview and committed UIA facts, external-selection epochs, a distinct CLR navigation epoch, Exact-only CLR loading, bounded field batches, lazy property reads, member paging, and explicit object-reference back navigation. A failed or quarantined replacement freeze does not discard the last healthy CLR graph. Ambiguous, high-confidence, no-direct-mapping, and unresolved correlation states retain UIA/correlation facts but do not load CLR identity; only genuinely unavailable/stale external evidence maps to `Stale`.
 
 The WPF app supplies a nonactivating, click-through overlay, polls the physical cursor for finder preview, freezes explicitly, renders detached UIA/correlation facts, reads properties only after the user requests them, and offers reference navigation. Its controlled bootstrap starts the existing synthetic WinForms target; real attach/bootstrap remains outside I4a.
 
 ## Tests and proof
 
-The implementation includes protocol union/strictness tests, Agent inspection/lifetime tests, MTA quarantine tests, existing I0–I3 regressions, and a live ObjectSpy integration test proving preview/freeze, Exact correlation, bounded field inspection, explicit getter read, object-reference navigation, and back navigation. The target exposes deterministic synthetic fields/properties solely for this proof while the existing button correlation remains a real `System.Windows.Forms.Button` path.
+The implementation includes semantic protocol union/strictness tests, canonical scalar and value-type conversion tests, Agent inspection/lifetime tests including collectible-ALC collection proof, malformed-request session-survival tests, deterministic coordinator race/quarantine tests, MTA quarantine tests, existing I0–I3 regressions, and a live ObjectSpy integration test proving preview/freeze, Exact correlation, bounded field inspection, explicit getter read, object-reference navigation, and back navigation. The target exposes deterministic synthetic fields/properties solely for this proof while the existing button correlation remains a real `System.Windows.Forms.Button` path.
 
 Run from `nativespy/`:
 

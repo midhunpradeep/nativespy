@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using NativeSpy.Protocol.Common;
 using NativeSpy.Protocol.Correlation;
 
@@ -75,6 +76,7 @@ public static class ClrInspectionContractLimits
     public const int MaxFieldsPerBatch = 64;
     public const int MaxStringCodeUnits = 4096;
     public const int MaxStructFields = 32;
+    public const int MaxStructPayloadBytes = 16 * 1024;
     public const int MaxContinuationTokenBytes = 512;
 }
 
@@ -451,10 +453,13 @@ public sealed class ClrValueDto
 
     public static ClrValueDto Integer(ClrIntegerKind kind, string canonicalValue)
     {
+        kind = ContractValidation.RequireDefinedEnum(kind, nameof(kind));
+        canonicalValue = ContractValidation.RequiredText(canonicalValue, nameof(canonicalValue));
+        ValidateCanonicalInteger(kind, canonicalValue, nameof(canonicalValue));
         return new ClrValueDto(ClrValueKind.Integer)
         {
-            IntegerKind = ContractValidation.RequireDefinedEnum(kind, nameof(kind)),
-            IntegerValue = ContractValidation.RequiredText(canonicalValue, nameof(canonicalValue))
+            IntegerKind = kind,
+            IntegerValue = canonicalValue
         };
     }
 
@@ -463,10 +468,13 @@ public sealed class ClrValueDto
         string bits,
         string? display = null)
     {
+        kind = ContractValidation.RequireDefinedEnum(kind, nameof(kind));
+        bits = ContractValidation.RequiredIdentifier(bits, nameof(bits));
+        ValidateFloatingPointBits(kind, bits, nameof(bits));
         return new ClrValueDto(ClrValueKind.FloatingPoint)
         {
-            FloatingPointKind = ContractValidation.RequireDefinedEnum(kind, nameof(kind)),
-            FloatingPointBits = ContractValidation.RequiredIdentifier(bits, nameof(bits)),
+            FloatingPointKind = kind,
+            FloatingPointBits = bits,
             FloatingPointDisplay = ContractValidation.OptionalText(display, nameof(display))
         };
     }
@@ -477,6 +485,15 @@ public sealed class ClrValueDto
         if (copy.Count != 4)
         {
             throw new ArgumentException("A decimal value requires exactly four bit fields.", nameof(bits));
+        }
+
+        try
+        {
+            _ = new decimal(copy.ToArray());
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ArgumentException("The decimal bit fields do not describe a legal CLR decimal.", nameof(bits), exception);
         }
 
         return new ClrValueDto(ClrValueKind.Decimal)
@@ -520,6 +537,13 @@ public sealed class ClrValueDto
         if (truncated != (returnedCodeUnitLength < originalCodeUnitLength))
         {
             throw new ArgumentException("String truncation metadata does not match the returned length.", nameof(truncated));
+        }
+
+        if (truncated && value.Length > 0 && char.IsHighSurrogate(value[value.Length - 1]))
+        {
+            throw new ArgumentException(
+                "A truncated string must not end at the first code unit of a surrogate pair.",
+                nameof(value));
         }
 
         return new ClrValueDto(ClrValueKind.String)
@@ -590,11 +614,14 @@ public sealed class ClrValueDto
         string underlyingValue,
         string? name = null)
     {
+        underlyingKind = ContractValidation.RequireDefinedEnum(underlyingKind, nameof(underlyingKind));
+        underlyingValue = ContractValidation.RequiredText(underlyingValue, nameof(underlyingValue));
+        ValidateCanonicalInteger(underlyingKind, underlyingValue, nameof(underlyingValue));
         return new ClrValueDto(ClrValueKind.Enum)
         {
             EnumType = enumType ?? throw new ArgumentNullException(nameof(enumType)),
-            EnumUnderlyingKind = ContractValidation.RequireDefinedEnum(underlyingKind, nameof(underlyingKind)),
-            EnumUnderlyingValue = ContractValidation.RequiredText(underlyingValue, nameof(underlyingValue)),
+            EnumUnderlyingKind = underlyingKind,
+            EnumUnderlyingValue = underlyingValue,
             EnumName = ContractValidation.OptionalText(name, nameof(name))
         };
     }
@@ -627,6 +654,22 @@ public sealed class ClrValueDto
             throw new ArgumentException("A non-expanded value type cannot contain expanded fields.", nameof(fields));
         }
 
+        if (notExpanded && truncated)
+        {
+            throw new ArgumentException("A non-expanded value type cannot be truncated.", nameof(truncated));
+        }
+
+        if (copy.Any(field =>
+                field.Value?.Kind == ClrValueKind.ValueType
+                && (!field.Value.StructNotExpanded
+                    || field.Value.StructFields is null
+                    || field.Value.StructFields.Count != 0)))
+        {
+            throw new ArgumentException(
+                "Nested value types must be type-only and must not contain expanded fields.",
+                nameof(fields));
+        }
+
         return new ClrValueDto(ClrValueKind.ValueType)
         {
             ValueType = valueType ?? throw new ArgumentNullException(nameof(valueType)),
@@ -645,5 +688,94 @@ public sealed class ClrValueDto
             ObjectReference = reference ?? throw new ArgumentNullException(nameof(reference)),
             ObjectType = objectType ?? throw new ArgumentNullException(nameof(objectType))
         };
+    }
+
+    private static void ValidateCanonicalInteger(
+        ClrIntegerKind kind,
+        string value,
+        string parameterName)
+    {
+        if (value.Length == 0 || value[0] == '+')
+        {
+            throw new ArgumentException("An integer must use canonical decimal syntax.", parameterName);
+        }
+
+        var digitStart = value[0] == '-' ? 1 : 0;
+        if (digitStart == value.Length)
+        {
+            throw new ArgumentException("An integer must contain at least one decimal digit.", parameterName);
+        }
+
+        for (var index = digitStart; index < value.Length; index++)
+        {
+            if (value[index] is < '0' or > '9')
+            {
+                throw new ArgumentException("An integer must contain only ASCII decimal digits.", parameterName);
+            }
+        }
+
+        var digitCount = value.Length - digitStart;
+        if (digitCount > 1 && value[digitStart] == '0')
+        {
+            throw new ArgumentException("An integer must not contain unnecessary leading zeroes.", parameterName);
+        }
+
+        if (value[0] == '-' && digitCount == 1 && value[digitStart] == '0')
+        {
+            throw new ArgumentException("Negative zero is not a canonical integer representation.", parameterName);
+        }
+
+        if (!BigInteger.TryParse(
+                value,
+                NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            throw new ArgumentException("The integer value is not valid.", parameterName);
+        }
+
+        var bounds = kind switch
+        {
+            ClrIntegerKind.SByte => (-(BigInteger.One << 7), (BigInteger.One << 7) - BigInteger.One),
+            ClrIntegerKind.Byte => (BigInteger.Zero, (BigInteger.One << 8) - BigInteger.One),
+            ClrIntegerKind.Int16 => (-(BigInteger.One << 15), (BigInteger.One << 15) - BigInteger.One),
+            ClrIntegerKind.UInt16 => (BigInteger.Zero, (BigInteger.One << 16) - BigInteger.One),
+            ClrIntegerKind.Int32 => (-(BigInteger.One << 31), (BigInteger.One << 31) - BigInteger.One),
+            ClrIntegerKind.UInt32 => (BigInteger.Zero, (BigInteger.One << 32) - BigInteger.One),
+            ClrIntegerKind.Int64 => (-(BigInteger.One << 63), (BigInteger.One << 63) - BigInteger.One),
+            ClrIntegerKind.UInt64 => (BigInteger.Zero, (BigInteger.One << 64) - BigInteger.One),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "The integer kind is not defined.")
+        };
+
+        if (parsed < bounds.Item1 || parsed > bounds.Item2)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                value,
+                $"The integer value is outside the {kind} range.");
+        }
+    }
+
+    private static void ValidateFloatingPointBits(
+        ClrFloatingPointKind kind,
+        string bits,
+        string parameterName)
+    {
+        var expectedLength = kind switch
+        {
+            ClrFloatingPointKind.Single => 8,
+            ClrFloatingPointKind.Double => 16,
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "The floating-point kind is not defined.")
+        };
+
+        if (bits.Length != expectedLength
+            || bits.Any(character =>
+                (character is < '0' or > '9')
+                && (character is < 'A' or > 'F')))
+        {
+            throw new ArgumentException(
+                $"{kind} bits must be exactly {expectedLength} uppercase hexadecimal characters.",
+                parameterName);
+        }
     }
 }
