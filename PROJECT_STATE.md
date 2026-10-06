@@ -36,7 +36,7 @@
 - dedicated serialized MTA UIA3 worker, physical point preview/freeze observations, PID-only candidate validation, explicit candidate/root HWND exclusion, and bounded hard-stuck quarantine;
 - `NativeSpy.ObjectSpy` Exact-only coordinator with transactional freeze candidates, separate preview/committed UIA facts, quarantine-preserving CLR state, independent CLR navigation epochs, lazy property reads, member paging, bounded field batches, explicit object-reference navigation, late-result rejection, and overlay port;
 - runnable WPF-only client `NativeSpy.ObjectSpy.App` with SourceInitialized main-window registration, overlay HWND lifecycle registration, a nonactivating click-through overlay, asynchronous bounded shutdown, and controlled synthetic WinForms target bootstrap;
-- semantic protocol/value validation including required CLR wire-collection presence, nested malformed CLR-wire rejection, malformed-success client/session policy, no-total `clr.listMembers` wire-shape proof, Agent value/lifetime/member-shape and collectible-ALC proof, malformed-request session survival, deterministic preview/freeze/candidate race and quarantine tests, FlaUI normal-failure versus hard-timeout coverage, live point-preview/self-exclusion proof, and executable shutdown proof;
+- semantic protocol/value validation including required CLR wire-collection presence, nested malformed CLR-wire rejection, malformed-success client/session policy, no-total `clr.listMembers` wire-shape proof, Agent value/lifetime/member-shape and collectible-ALC proof, malformed-request session survival, deterministic preview/freeze/candidate race and quarantine tests, FlaUI normal-failure versus hard-timeout coverage, live point-preview/self-exclusion proof, real HWND-less WPF-child UIA-ancestry/exclusion proof, and executable shutdown proof;
 
 ## Not implemented / deferred
 
@@ -59,7 +59,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 261 passing, 0 skipped in the verified environment (95 Protocol, 22 Agent, 64 Client, 2 Agent.WinForms, 2 FlaUI, 76 integration).
+- Tests: 263 passing, 0 skipped in the verified environment (95 Protocol, 22 Agent, 64 Client, 2 Agent.WinForms, 2 FlaUI, 78 integration).
 
 ## Known limitations
 
@@ -68,7 +68,7 @@
 - The former JSON Lines bridge and test-only text command were removed; stdout carries only the bootstrap descriptor and RPC uses Named Pipes.
 - Full collectible-ALC unload invalidation is not implemented; I2 only establishes actual ALC identity and keeps boundary caches weak.
 - FlaUI and WinForms live objects remain isolated to their respective projects; Client sees detached facts only.
-- The live point-preview, self-exclusion, and executable-shutdown integration tests require Windows, x64, modern .NET WinForms/WPF, and an interactive desktop/UIA environment.
+- The live point-preview, self-exclusion, HWND-less WPF-child ancestry, and executable-shutdown integration tests require Windows, x64, modern .NET WinForms/WPF, and an interactive desktop/UIA environment.
 - The coordinate contract is explicitly physical-pixel based and signed-coordinate tested; manual mixed-DPI hardware validation is unavailable in the current environment.
 - I3 fixes JSON depth at 64 and does not negotiate or expose a per-session depth override.
 - Late target work remains counted during an active session, but terminal Host shutdown does not wait indefinitely for it. Queued WinForms work that never starts settles as unavailable; already-running target work is never forcibly aborted.

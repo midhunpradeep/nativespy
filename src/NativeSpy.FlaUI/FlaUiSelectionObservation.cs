@@ -41,8 +41,16 @@ public sealed class FlaUiSelectionObservation
 
     public int? CandidateProcessId { get; }
 
+    /// <summary>
+    /// The native HWND directly exposed by the selected UI Automation element, if any.
+    /// HWND-less descendants remain null here.
+    /// </summary>
     public ulong? CandidateHwnd { get; }
 
+    /// <summary>
+    /// The hosting/root native HWND. This is derived from <see cref="CandidateHwnd"/>
+    /// when present, or from the first suitable UI Automation ancestor exposing an HWND.
+    /// </summary>
     public ulong? RootHwnd { get; }
 
     public Rectangle? Bounds { get; }

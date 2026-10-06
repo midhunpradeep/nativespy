@@ -13,6 +13,7 @@ namespace NativeSpy.FlaUI;
 /// </summary>
 public sealed class FlaUiAutomationSession : IDisposable, IAsyncDisposable
 {
+    private const int MaximumNativeWindowAncestorDepth = 64;
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(5);
     private readonly FlaUiMtaExecutor _executor;
     private readonly Application _application;
@@ -363,7 +364,9 @@ public sealed class FlaUiAutomationSession : IDisposable, IAsyncDisposable
         ulong? candidateHwnd = candidateHwndValue > 0
             ? unchecked((ulong)(uint)candidateHwndValue)
             : null;
-        var rootHwnd = candidateHwnd is null ? null : TryGetRootHwnd(candidateHwnd.Value);
+        var rootHwnd = candidateHwnd is ulong nativeHwnd
+            ? TryGetRootHwnd(nativeHwnd)
+            : TryFindAncestorRootHwnd(element);
         var rectangle = element.Properties.BoundingRectangle.ValueOrDefault;
         var runtimeId = element.Properties.RuntimeId.ValueOrDefault;
         var isAvailable = element.IsAvailable;
@@ -391,6 +394,61 @@ public sealed class FlaUiAutomationSession : IDisposable, IAsyncDisposable
             limitation);
     }
 
+    private ulong? TryFindAncestorRootHwnd(AutomationElement element)
+    {
+        ITreeWalker walker;
+        try
+        {
+            walker = _automation.TreeWalkerFactory.GetRawViewWalker();
+        }
+        catch (Exception exception) when (IsExpectedUiaNavigationFailure(exception))
+        {
+            return null;
+        }
+
+        var current = element;
+        var visitedRuntimeIds = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var depth = 0; depth < MaximumNativeWindowAncestorDepth; depth++)
+        {
+            try
+            {
+                if (!current.IsAvailable)
+                {
+                    return null;
+                }
+
+                var runtimeId = current.Properties.RuntimeId.ValueOrDefault;
+                if (runtimeId is { Length: > 0 }
+                    && !visitedRuntimeIds.Add(string.Join(",", runtimeId)))
+                {
+                    return null;
+                }
+
+                var ancestor = walker.GetParent(current);
+                if (ancestor is null || !ancestor.IsAvailable)
+                {
+                    return null;
+                }
+
+                var ancestorHwndValue = ancestor.Properties.NativeWindowHandle.ValueOrDefault;
+                if (ancestorHwndValue > 0)
+                {
+                    var ancestorHwnd = unchecked((ulong)(uint)ancestorHwndValue);
+                    return TryGetRootHwnd(ancestorHwnd);
+                }
+
+                current = ancestor;
+            }
+            catch (Exception exception) when (IsExpectedUiaNavigationFailure(exception))
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
     private static ulong? TryGetRootHwnd(ulong hwnd)
     {
         if (hwnd == 0 || hwnd > long.MaxValue)
@@ -400,6 +458,14 @@ public sealed class FlaUiAutomationSession : IDisposable, IAsyncDisposable
 
         var root = GetAncestor(new IntPtr(unchecked((long)hwnd)), 2);
         return root == IntPtr.Zero ? null : unchecked((ulong)root.ToInt64());
+    }
+
+    private static bool IsExpectedUiaNavigationFailure(Exception exception)
+    {
+        return exception is COMException
+            or InvalidOperationException
+            or TimeoutException
+            or ArgumentException;
     }
 
     private void OnExecutorExited()
