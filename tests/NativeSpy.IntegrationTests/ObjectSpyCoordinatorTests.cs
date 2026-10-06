@@ -69,6 +69,31 @@ public sealed class ObjectSpyCoordinatorTests
     }
 
     [Fact]
+    public async Task A_terminal_clr_protocol_failure_is_visible_without_destroying_the_selection_graph()
+    {
+        var root = CreateObject("root", "Root");
+        var inspection = new FakeInspectionPort();
+        inspection.SetObject(root, Array.Empty<MemberDescriptorDto>(), Array.Empty<MemberReadResultDto>());
+        var ui = new FakeUiSession(ProcessId)
+        {
+            FreezePlan = (_, _) => Task.FromResult(CreateFrozenSelection("healthy", available: true))
+        };
+        await using var coordinator = CreateCoordinator(ui, inspection, CreateExactTargetPort(root));
+
+        await coordinator.FreezeAsync(ScreenPoint);
+        Assert.Equal(ObjectSpyClrState.Ready, coordinator.State.ClrState);
+
+        coordinator.ReportClrProtocolFailure(
+            new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation, "invalid CLR success payload"));
+
+        Assert.Equal(ObjectSpySelectionState.Frozen, coordinator.State.SelectionState);
+        Assert.Equal(ObjectSpyClrState.Error, coordinator.State.ClrState);
+        Assert.Contains("protocol failure", coordinator.State.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("invalid CLR success payload", coordinator.State.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Same(root, coordinator.State.ManagedObject);
+    }
+
+    [Fact]
     public async Task A_capture_failure_after_candidate_acquisition_preserves_the_healthy_graph()
     {
         var root = CreateObject("root", "Root");

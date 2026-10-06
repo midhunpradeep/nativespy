@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using NativeSpy.Agent;
 using NativeSpy.Protocol.Clr;
 using NativeSpy.Protocol.Common;
@@ -8,6 +10,26 @@ namespace NativeSpy.Agent.Tests;
 
 public sealed class ClrInspectionServiceTests
 {
+    [Fact]
+    public void Listing_collectible_members_populates_and_clears_member_identity_state()
+    {
+        using var session = new ClrAgentSession();
+        var service = new ClrInspectionService(session);
+        var probe = CreateCollectibleMemberProbe(session, service);
+
+        Assert.NotEmpty(probe.MemberIds);
+        Assert.All(probe.MemberIds, memberId => Assert.StartsWith("clr-member-", memberId, StringComparison.Ordinal));
+        Assert.Equal(probe.MemberIds.Length, service.MemberIdentityCount);
+
+        service.Dispose();
+        Assert.Equal(0, service.MemberIdentityCount);
+        session.Close();
+
+        Assert.True(WaitForCollection(probe.LoadContext));
+        Assert.True(WaitForCollection(probe.Type));
+        Assert.True(WaitForCollection(probe.Target));
+    }
+
     [Fact]
     public void Listing_members_does_not_execute_property_getters()
     {
@@ -202,6 +224,46 @@ public sealed class ClrInspectionServiceTests
         var wrong = new MemberRefDto("other-session", member.MemberId, member.BoundaryId, member.DeclaringTypeId);
         var fieldRead = service.ReadFieldValues(new ReadFieldValuesRequestDto(reference, new[] { wrong }));
         Assert.Equal(OperationErrorCode.InvalidMemberReference, fieldRead.Value!.Results[0].ErrorCode);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference LoadContext, WeakReference Type, WeakReference Target, string[] MemberIds)
+        CreateCollectibleMemberProbe(ClrAgentSession session, ClrInspectionService service)
+    {
+        var loadContext = new AssemblyLoadContext("agent-member-collectible-proof", isCollectible: true);
+        using var stream = File.OpenRead(typeof(ClrAgentSessionTests.CrossLoadContextFixture).Assembly.Location);
+        var assembly = loadContext.LoadFromStream(stream);
+        var type = assembly.GetType(typeof(ClrAgentSessionTests.CrossLoadContextFixture).FullName!, throwOnError: true)!;
+        var target = Activator.CreateInstance(type)!;
+        var reference = AssertRegistration(session.Register(target));
+        var response = service.ListMembers(
+            new ListMembersRequestDto(reference, 128, ClrMemberKindFilter.All));
+        Assert.True(response.IsSuccess, response.Error?.Message);
+
+        var loadContextReference = new WeakReference(loadContext);
+        var typeReference = new WeakReference(type);
+        var targetReference = new WeakReference(target);
+        var memberIds = response.Value!.Members.Select(member => member.Member.MemberId).ToArray();
+        loadContext.Unload();
+        return (loadContextReference, typeReference, targetReference, memberIds);
+    }
+
+    private static bool WaitForCollection(WeakReference weakReference)
+    {
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            if (!weakReference.IsAlive)
+            {
+                return true;
+            }
+
+            Thread.Sleep(10);
+        }
+
+        return !weakReference.IsAlive;
     }
 
     private static MemberReadResultDto AssertAvailable(

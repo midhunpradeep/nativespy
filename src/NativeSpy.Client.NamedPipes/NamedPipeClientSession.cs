@@ -388,15 +388,17 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
     {
         try
         {
+            var request = new DescribeObjectRequestDto(@object);
             var response = await SendRequestAsync(
                     NamedPipeOperationNames.DescribeObject,
-                    ClrInspectionJsonCodec.CreateDescribeObjectPayload(@object),
+                    ClrInspectionJsonCodec.CreateDescribeObjectPayload(request.Object),
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
             return ClrInspectionClientResult<DescribeObjectResponseDto>.Success(
                 DecodeClrSuccessPayload(
                     ReadSuccessPayload(response),
-                    ClrInspectionJsonCodec.DeserializeDescribeObjectResponse));
+                    ClrInspectionJsonCodec.DeserializeDescribeObjectResponse,
+                    decoded => ClrInspectionResponseValidation.ValidateDescribe(request, decoded)));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -427,7 +429,8 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
             return ClrInspectionClientResult<ListMembersResponseDto>.Success(
                 DecodeClrSuccessPayload(
                     ReadSuccessPayload(response),
-                    ClrInspectionJsonCodec.DeserializeListMembersResponse));
+                    ClrInspectionJsonCodec.DeserializeListMembersResponse,
+                    decoded => ClrInspectionResponseValidation.ValidateListMembers(request, decoded)));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -456,7 +459,8 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
             return ClrInspectionClientResult<ReadFieldValuesResponseDto>.Success(
                 DecodeClrSuccessPayload(
                     ReadSuccessPayload(response),
-                    ClrInspectionJsonCodec.DeserializeReadFieldValuesResponse));
+                    ClrInspectionJsonCodec.DeserializeReadFieldValuesResponse,
+                    decoded => ClrInspectionResponseValidation.ValidateReadFieldValues(request, decoded)));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -485,7 +489,8 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
             return ClrInspectionClientResult<ReadPropertyValueResponseDto>.Success(
                 DecodeClrSuccessPayload(
                     ReadSuccessPayload(response),
-                    ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse));
+                    ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse,
+                    decoded => ClrInspectionResponseValidation.ValidateReadPropertyValue(request, decoded)));
         }
         catch (NamedPipeOperationException exception)
         {
@@ -554,6 +559,11 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                     throw new NamedPipeProtocolException(
                         new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation));
                 }
+
+                // Decode error-code names before handing the response to a
+                // caller.  This makes unknown operation/protocol codes
+                // terminal even for the low-level SendRequestAsync API.
+                ValidateResponseErrorCodes(response);
 
                 if (_pending.TryRemove(requestNumber, out var pending))
                 {
@@ -687,30 +697,46 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
         }
     }
 
-    private static JsonElement ReadSuccessPayload(ResponseEnvelopeWire response)
+    private JsonElement ReadSuccessPayload(ResponseEnvelopeWire response)
     {
-        return response.ResultStatus switch
+        try
         {
-            ProtocolJsonCodec.SuccessStatus when response.Payload is JsonElement payload
-                => payload,
-            ProtocolJsonCodec.OperationErrorStatus when response.OperationError is not null
-                => throw new NamedPipeOperationException(ToOperationError(response.OperationError)),
-            ProtocolJsonCodec.ProtocolErrorStatus when response.ProtocolError is not null
-                => throw new NamedPipeProtocolException(ToProtocolError(response.ProtocolError)),
-            _ => throw new NamedPipeProtocolException(
-                new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation))
-        };
+            return response.ResultStatus switch
+            {
+                ProtocolJsonCodec.SuccessStatus when response.Payload is JsonElement payload
+                    => payload,
+                ProtocolJsonCodec.OperationErrorStatus when response.OperationError is not null
+                    => throw new NamedPipeOperationException(ToOperationError(response.OperationError)),
+                ProtocolJsonCodec.ProtocolErrorStatus when response.ProtocolError is not null
+                    => throw new NamedPipeProtocolException(ToProtocolError(response.ProtocolError)),
+                _ => throw new NamedPipeProtocolException(
+                    new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation))
+            };
+        }
+        catch (NamedPipeProtocolException exception)
+        {
+            // A protocol-error response, including an unknown error code, is
+            // terminal.  A typed operation-error response is deliberately not
+            // caught here and remains a normal operation result.
+            TransitionTerminal(exception);
+            throw;
+        }
     }
 
     private T DecodeClrSuccessPayload<T>(
         JsonElement payload,
-        Func<JsonElement, T> decoder)
+        Func<JsonElement, T> decoder,
+        Action<T>? validate = null)
     {
         try
         {
-            return decoder(payload);
+            var decoded = decoder(payload);
+            validate?.Invoke(decoded);
+            return decoded;
         }
-        catch (ProtocolJsonException exception)
+        catch (Exception exception) when (
+            exception is ProtocolJsonException
+                or ClrResponseSemanticException)
         {
             var protocolException = new NamedPipeProtocolException(
                 new ProtocolErrorDto(
@@ -722,19 +748,50 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
         }
     }
 
-    private static FrameworkCorrelationEvidenceDto ReadFrameworkResponse(ResponseEnvelopeWire response)
+    private FrameworkCorrelationEvidenceDto ReadFrameworkResponse(ResponseEnvelopeWire response)
     {
-        return response.ResultStatus switch
+        try
         {
-            ProtocolJsonCodec.SuccessStatus when response.Payload is JsonElement payload
-                => ProtocolJsonCodec.DeserializeFrameworkEvidence(payload),
-            ProtocolJsonCodec.OperationErrorStatus when response.OperationError is not null
-                => throw new NamedPipeOperationException(ToOperationError(response.OperationError)),
-            ProtocolJsonCodec.ProtocolErrorStatus when response.ProtocolError is not null
-                => throw new NamedPipeProtocolException(ToProtocolError(response.ProtocolError)),
-            _ => throw new NamedPipeProtocolException(
-                new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation))
-        };
+            return response.ResultStatus switch
+            {
+                ProtocolJsonCodec.SuccessStatus when response.Payload is JsonElement payload
+                    => ProtocolJsonCodec.DeserializeFrameworkEvidence(payload),
+                ProtocolJsonCodec.OperationErrorStatus when response.OperationError is not null
+                    => throw new NamedPipeOperationException(ToOperationError(response.OperationError)),
+                ProtocolJsonCodec.ProtocolErrorStatus when response.ProtocolError is not null
+                    => throw new NamedPipeProtocolException(ToProtocolError(response.ProtocolError)),
+                _ => throw new NamedPipeProtocolException(
+                    new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation))
+            };
+        }
+        catch (NamedPipeProtocolException exception)
+        {
+            TransitionTerminal(exception);
+            throw;
+        }
+        catch (ProtocolJsonException exception)
+        {
+            var protocolException = new NamedPipeProtocolException(
+                new ProtocolErrorDto(
+                    ProtocolErrorCode.ProtocolViolation,
+                    "The Host returned an invalid framework success payload.",
+                    exception.Message));
+            TransitionTerminal(protocolException);
+            throw protocolException;
+        }
+    }
+
+    private static void ValidateResponseErrorCodes(ResponseEnvelopeWire response)
+    {
+        if (response.OperationError is not null)
+        {
+            _ = ToOperationError(response.OperationError);
+        }
+
+        if (response.ProtocolError is not null)
+        {
+            _ = ToProtocolError(response.ProtocolError);
+        }
     }
 
     private static OperationErrorDto ToOperationError(OperationErrorWire error)
@@ -746,7 +803,14 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                 new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation, "The Host returned an unknown operation error."));
         }
 
-        return new OperationErrorDto(code, error.Message);
+        try
+        {
+            return new OperationErrorDto(code, error.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            throw CreateInvalidResponseError("operation", exception);
+        }
     }
 
     private static ProtocolErrorDto ToProtocolError(ProtocolErrorWire error)
@@ -758,7 +822,25 @@ public sealed class NamedPipeClientSession : IWinFormsCorrelationPort, IClrInspe
                 new ProtocolErrorDto(ProtocolErrorCode.ProtocolViolation, "The Host returned an unknown protocol error."));
         }
 
-        return new ProtocolErrorDto(code, error.Message, error.DiagnosticId);
+        try
+        {
+            return new ProtocolErrorDto(code, error.Message, error.DiagnosticId);
+        }
+        catch (ArgumentException exception)
+        {
+            throw CreateInvalidResponseError("protocol", exception);
+        }
+    }
+
+    private static NamedPipeProtocolException CreateInvalidResponseError(
+        string errorKind,
+        ArgumentException exception)
+    {
+        return new NamedPipeProtocolException(
+            new ProtocolErrorDto(
+                ProtocolErrorCode.ProtocolViolation,
+                $"The Host returned an invalid {errorKind} error.",
+                exception.GetType().Name));
     }
 
     private FrameworkCorrelationEvidenceDto CreateFailureEvidence(

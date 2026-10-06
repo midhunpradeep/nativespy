@@ -73,6 +73,23 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
 
     public ObjectSpyViewState State => _state;
 
+    public void ReportClrProtocolFailure(ProtocolErrorDto error)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        ArgumentNullException.ThrowIfNull(error);
+
+        lock (_gate)
+        {
+            _state.ClrState = ObjectSpyClrState.Error;
+            _state.Error = error.Message is { Length: > 0 } message
+                ? $"CLR inspection protocol failure ({error.Code}): {message}"
+                : $"CLR inspection protocol failure ({error.Code}).";
+            UpdateCommittedSelectionErrorLocked();
+        }
+
+        PublishStateChanged();
+    }
+
     public event EventHandler? StateChanged;
 
     public async Task PreviewAsync(Point screenPoint, CancellationToken cancellationToken = default)

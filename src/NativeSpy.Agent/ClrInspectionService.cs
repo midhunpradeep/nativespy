@@ -23,6 +23,8 @@ public sealed class ClrInspectionService : IDisposable
         _memberRegistry = new MemberIdentityRegistry(session.SessionId);
     }
 
+    internal int MemberIdentityCount => _memberRegistry.Count;
+
     public ClrInspectionResult<DescribeObjectResponseDto> DescribeObject(
         DescribeObjectRequestDto request)
     {

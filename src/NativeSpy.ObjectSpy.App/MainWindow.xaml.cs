@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private System.Drawing.Point _lastScreenPoint;
     private int _finderActive;
     private int _previewBusy;
+    private bool _finderQuarantined;
     private bool _closing;
     private bool _allowClose;
     private int _shutdownStarted;
@@ -89,7 +90,11 @@ public partial class MainWindow : Window
 
     private void FinderButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (_closing || _coordinator is null)
+        if (_closing
+            || _coordinator is null
+            || _finderQuarantined
+            || _coordinator.State.SelectionState == ObjectSpySelectionState.Quarantined
+            || _flaUi?.IsPoisoned == true)
         {
             return;
         }
@@ -112,7 +117,12 @@ public partial class MainWindow : Window
 
     private async void FixButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (_closing || _coordinator is null || _finderActive == 0)
+        if (_closing
+            || _coordinator is null
+            || _finderActive == 0
+            || _finderQuarantined
+            || _coordinator.State.SelectionState == ObjectSpySelectionState.Quarantined
+            || _flaUi?.IsPoisoned == true)
         {
             return;
         }
@@ -125,9 +135,20 @@ public partial class MainWindow : Window
         {
             await _coordinator.FreezeAsync(_lastScreenPoint);
         }
+        catch (NamedPipeProtocolException exception)
+        {
+            ReportClrProtocolFailure(exception);
+        }
         finally
         {
-            FixButton.IsEnabled = true;
+            if (!_finderQuarantined
+                && !_closing
+                && _coordinator?.State.SelectionState != ObjectSpySelectionState.Quarantined
+                && _coordinator?.State.ClrState != ObjectSpyClrState.Error
+                && _flaUi?.IsPoisoned != true)
+            {
+                FixButton.IsEnabled = true;
+            }
         }
     }
 
@@ -141,7 +162,13 @@ public partial class MainWindow : Window
 
     private async void FinderTimerOnTick(object? sender, EventArgs e)
     {
-        if (_closing || _coordinator is null || _finderActive == 0 || Interlocked.Exchange(ref _previewBusy, 1) != 0)
+        if (_closing
+            || _coordinator is null
+            || _finderActive == 0
+            || _finderQuarantined
+            || _coordinator.State.SelectionState == ObjectSpySelectionState.Quarantined
+            || _flaUi?.IsPoisoned == true
+            || Interlocked.Exchange(ref _previewBusy, 1) != 0)
         {
             return;
         }
@@ -180,6 +207,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        ApplyFinderAvailability(state);
         StateText.Text = $"Selection: {state.SelectionState}; CLR: {state.ClrState}";
         var observation = state.PreviewObservation ?? state.SelectionObservation;
         NameText.Text = observation?.Name ?? "—";
@@ -202,6 +230,31 @@ public partial class MainWindow : Window
         BackButton.IsEnabled = state.NavigationDepth > 0;
         ErrorText.Text = state.Error ?? observation?.Limitation ?? string.Empty;
         RenderClrPanel(state);
+    }
+
+    private void ApplyFinderAvailability(ObjectSpyViewState state)
+    {
+        if (state.SelectionState == ObjectSpySelectionState.Quarantined
+            || _flaUi?.IsPoisoned == true)
+        {
+            _finderQuarantined = true;
+            _finderActive = 0;
+            _finderTimer?.Stop();
+            FinderButton.IsEnabled = false;
+            FinderButton.Content = "Finder quarantined";
+            FixButton.IsEnabled = false;
+            return;
+        }
+
+        if (!_closing && !_finderQuarantined)
+        {
+            FinderButton.IsEnabled = true;
+            if (_finderActive == 0)
+            {
+                FinderButton.Content = "Activate finder";
+                FixButton.IsEnabled = false;
+            }
+        }
     }
 
     private void RenderClrPanel(ObjectSpyViewState state)
@@ -323,7 +376,31 @@ public partial class MainWindow : Window
     {
         if (!_closing && _coordinator is not null)
         {
-            await _coordinator.LoadNextMemberPageAsync();
+            try
+            {
+                await _coordinator.LoadNextMemberPageAsync();
+            }
+            catch (NamedPipeProtocolException exception)
+            {
+                ReportClrProtocolFailure(exception);
+            }
+        }
+    }
+
+    private void ReportClrProtocolFailure(NamedPipeProtocolException exception)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        try
+        {
+            _coordinator?.ReportClrProtocolFailure(exception.Error);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Shutdown won the race with the terminal response.
         }
     }
 
@@ -331,7 +408,14 @@ public partial class MainWindow : Window
     {
         if (!_closing && sender is Button { Tag: MemberDescriptorDto member } && _coordinator is not null)
         {
-            await _coordinator.ReadPropertyAsync(member);
+            try
+            {
+                await _coordinator.ReadPropertyAsync(member);
+            }
+            catch (NamedPipeProtocolException exception)
+            {
+                ReportClrProtocolFailure(exception);
+            }
         }
     }
 
@@ -339,7 +423,14 @@ public partial class MainWindow : Window
     {
         if (!_closing && sender is Button { Tag: ClrValueDto value } && _coordinator is not null)
         {
-            await _coordinator.FollowObjectReferenceAsync(value);
+            try
+            {
+                await _coordinator.FollowObjectReferenceAsync(value);
+            }
+            catch (NamedPipeProtocolException exception)
+            {
+                ReportClrProtocolFailure(exception);
+            }
         }
     }
 

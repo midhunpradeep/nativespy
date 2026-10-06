@@ -78,6 +78,14 @@ public static class ClrInspectionContractLimits
     public const int MaxStructFields = 32;
     public const int MaxStructPayloadBytes = 16 * 1024;
     public const int MaxContinuationTokenBytes = 512;
+
+    public static bool IsMemberLocalUnavailableError(OperationErrorCode code)
+    {
+        return code is OperationErrorCode.InvalidMemberReference
+            or OperationErrorCode.RuntimeUnavailable
+            or OperationErrorCode.MemberUnavailable
+            or OperationErrorCode.RegistryQuotaExceeded;
+    }
 }
 
 public sealed class MemberRefDto
@@ -302,9 +310,20 @@ public sealed class MemberReadResultDto
             throw new ArgumentException("A target failure cannot contain an operation error code.", nameof(errorCode));
         }
 
-        if (Outcome == ClrReadOutcome.Unavailable && errorCode is null)
+        if (Outcome == ClrReadOutcome.Unavailable
+            && (errorCode is null
+                || !ClrInspectionContractLimits.IsMemberLocalUnavailableError(errorCode.Value)))
         {
-            throw new ArgumentException("An unavailable member result requires an error code.", nameof(errorCode));
+            throw new ArgumentException(
+                "An unavailable member result requires a member-local error code.",
+                nameof(errorCode));
+        }
+
+        if (Outcome == ClrReadOutcome.Unsupported && errorCode is not null)
+        {
+            throw new ArgumentException(
+                "An unsupported member result cannot contain an operation error code.",
+                nameof(errorCode));
         }
 
         Member = member;

@@ -10,6 +10,33 @@ namespace NativeSpy.Protocol.Tests;
 
 public sealed class ClrInspectionProtocolTests
 {
+    [Theory]
+    [InlineData(OperationErrorCode.TargetTimeout)]
+    [InlineData(OperationErrorCode.ObjectCollected)]
+    [InlineData(OperationErrorCode.InvalidContinuation)]
+    public void Unavailable_member_results_reject_top_level_error_codes(OperationErrorCode code)
+    {
+        var member = new MemberRefDto("session", "member", "boundary", "type");
+
+        Assert.Throws<ArgumentException>(() =>
+            new MemberReadResultDto(
+                member,
+                ClrReadOutcome.Unavailable,
+                errorCode: code));
+    }
+
+    [Fact]
+    public void Unsupported_member_results_cannot_carry_an_error_code()
+    {
+        var member = new MemberRefDto("session", "member", "boundary", "type");
+
+        Assert.Throws<ArgumentException>(() =>
+            new MemberReadResultDto(
+                member,
+                ClrReadOutcome.Unsupported,
+                errorCode: OperationErrorCode.MemberUnavailable));
+    }
+
     [Fact]
     public void List_members_response_exposes_no_total_cardinality_field()
     {

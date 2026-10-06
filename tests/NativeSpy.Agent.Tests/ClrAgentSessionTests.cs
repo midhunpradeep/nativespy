@@ -504,5 +504,7 @@ public sealed class ClrAgentSessionTests
         public CrossLoadContextFixture()
         {
         }
+
+        public int Value = 7;
     }
 }
