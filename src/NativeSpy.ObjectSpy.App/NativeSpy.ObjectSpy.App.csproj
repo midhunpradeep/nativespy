@@ -19,6 +19,11 @@
     <TestTargetProjectReference Include="..\..\tests\NativeSpy.TestTarget.WinForms\NativeSpy.TestTarget.WinForms.csproj" />
     <ProjectReference Include="@(TestTargetProjectReference)" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <Target Name="GetNativeSpyObjectSpyAppArtifacts" DependsOnTargets="Build" Returns="@(ObjectSpyAppArtifacts)">
+    <ItemGroup>
+      <ObjectSpyAppArtifacts Include="$(TargetDir)**\*" />
+    </ItemGroup>
+  </Target>
   <Target Name="CopyControlledTargetArtifacts" AfterTargets="Build">
     <MSBuild
       Projects="@(TestTargetProjectReference)"

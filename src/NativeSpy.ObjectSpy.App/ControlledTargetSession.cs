@@ -8,12 +8,13 @@ using NativeSpy.Transport.NamedPipes;
 
 namespace NativeSpy.ObjectSpy.App;
 
-internal sealed class ControlledTargetSession : IDisposable
+internal sealed class ControlledTargetSession : IDisposable, IAsyncDisposable
 {
     private const int ReadTimeoutMilliseconds = 10_000;
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
     private readonly Process _process;
     private readonly Task<string> _stderrDrain;
-    private bool _disposed;
+    private int _disposed;
 
     private ControlledTargetSession(
         Process process,
@@ -89,20 +90,21 @@ internal sealed class ControlledTargetSession : IDisposable
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
         try
         {
-            Session.DisposeAsync().GetAwaiter().GetResult();
+            await Session.DisposeAsync().AsTask().WaitAsync(ShutdownTimeout).ConfigureAwait(false);
         }
         catch
         {
+            // The process lifetime below remains authoritative if the pipe is
+            // already terminal or does not settle within the bounded window.
         }
 
         try
@@ -116,13 +118,74 @@ internal sealed class ControlledTargetSession : IDisposable
         {
         }
 
-        if (!_process.HasExited && !_process.WaitForExit(ReadTimeoutMilliseconds))
+        var exited = await WaitForExitAsync(ShutdownTimeout).ConfigureAwait(false);
+        if (!exited)
         {
-            TryKill(_process);
+            await ForceTerminateAsync(_process).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await _stderrDrain.WaitAsync(ShutdownTimeout).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Do not let a diagnostic pipe prevent the owned process from
+            // being reaped or the WPF dispatcher from completing shutdown.
         }
 
         _process.Dispose();
-        _ = _stderrDrain.GetAwaiter().GetResult();
+    }
+
+    public void Dispose()
+    {
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private async Task<bool> WaitForExitAsync(TimeSpan timeout)
+    {
+        try
+        {
+            if (_process.HasExited)
+            {
+                return true;
+            }
+
+            using var cancellation = new CancellationTokenSource(timeout);
+            await _process.WaitForExitAsync(cancellation.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch
+        {
+            return _process.HasExited;
+        }
+    }
+
+    private static async Task ForceTerminateAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            using var cancellation = new CancellationTokenSource(ShutdownTimeout);
+            await process.WaitForExitAsync(cancellation.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
     }
 
     private static string ReadLine(Process process)

@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using NativeSpy.Client.NamedPipes;
 using NativeSpy.FlaUI;
@@ -22,15 +24,38 @@ public partial class MainWindow : Window
     private int _finderActive;
     private int _previewBusy;
     private bool _closing;
+    private bool _allowClose;
+    private int _shutdownStarted;
+    private ulong? _mainWindowHandle;
+    private Task _startupTask = Task.CompletedTask;
+    private Task? _shutdownTask;
 
     public MainWindow()
     {
         InitializeComponent();
+        SourceInitialized += MainWindowOnSourceInitialized;
         Loaded += OnLoaded;
-        Closed += OnClosed;
+        Closing += OnClosing;
+        _overlay.NativeWindowCreated += OverlayOnNativeWindowCreated;
+        _overlay.NativeWindowDestroyed += OverlayOnNativeWindowDestroyed;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    private void MainWindowOnSourceInitialized(object? sender, EventArgs e)
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle != IntPtr.Zero)
+        {
+            _mainWindowHandle = unchecked((ulong)handle.ToInt64());
+            RegisterOwnedWindowHandles();
+        }
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        _startupTask = InitializeAsync();
+    }
+
+    private async Task InitializeAsync()
     {
         try
         {
@@ -39,6 +64,7 @@ public partial class MainWindow : Window
             ConnectionText.Text = "Attaching UIA3...";
             _flaUi = await Task.Run(() => FlaUiAutomationSession.Attach(_target.ProcessIdentity))
                 .ConfigureAwait(true);
+            RegisterOwnedWindowHandles();
             _coordinator = new ObjectSpyCoordinator(
                 _target.ProcessIdentity,
                 _flaUi,
@@ -63,7 +89,7 @@ public partial class MainWindow : Window
 
     private void FinderButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (_coordinator is null)
+        if (_closing || _coordinator is null)
         {
             return;
         }
@@ -86,7 +112,7 @@ public partial class MainWindow : Window
 
     private async void FixButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (_coordinator is null || _finderActive == 0)
+        if (_closing || _coordinator is null || _finderActive == 0)
         {
             return;
         }
@@ -107,12 +133,15 @@ public partial class MainWindow : Window
 
     private void BackButton_OnClick(object sender, RoutedEventArgs e)
     {
-        _coordinator?.Back();
+        if (!_closing)
+        {
+            _coordinator?.Back();
+        }
     }
 
     private async void FinderTimerOnTick(object? sender, EventArgs e)
     {
-        if (_coordinator is null || _finderActive == 0 || Interlocked.Exchange(ref _previewBusy, 1) != 0)
+        if (_closing || _coordinator is null || _finderActive == 0 || Interlocked.Exchange(ref _previewBusy, 1) != 0)
         {
             return;
         }
@@ -292,7 +321,7 @@ public partial class MainWindow : Window
 
     private async void LoadNextMemberPageButtonOnClick(object sender, RoutedEventArgs e)
     {
-        if (_coordinator is not null)
+        if (!_closing && _coordinator is not null)
         {
             await _coordinator.LoadNextMemberPageAsync();
         }
@@ -300,7 +329,7 @@ public partial class MainWindow : Window
 
     private async void ReadPropertyButtonOnClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: MemberDescriptorDto member } && _coordinator is not null)
+        if (!_closing && sender is Button { Tag: MemberDescriptorDto member } && _coordinator is not null)
         {
             await _coordinator.ReadPropertyAsync(member);
         }
@@ -308,7 +337,7 @@ public partial class MainWindow : Window
 
     private async void FollowButtonOnClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: ClrValueDto value } && _coordinator is not null)
+        if (!_closing && sender is Button { Tag: ClrValueDto value } && _coordinator is not null)
         {
             await _coordinator.FollowObjectReferenceAsync(value);
         }
@@ -352,18 +381,159 @@ public partial class MainWindow : Window
         return hwnd is null ? "—" : $"0x{hwnd.Value:X}";
     }
 
-    private void OnClosed(object? sender, EventArgs e)
+    private void OverlayOnNativeWindowCreated(ulong hwnd)
     {
-        if (_closing)
+        _flaUi?.RegisterExcludedWindow(hwnd);
+    }
+
+    private void OverlayOnNativeWindowDestroyed(ulong hwnd)
+    {
+        _flaUi?.UnregisterExcludedWindow(hwnd);
+    }
+
+    private void RegisterOwnedWindowHandles()
+    {
+        if (_flaUi is null)
+        {
+            return;
+        }
+
+        if (_mainWindowHandle is ulong mainWindowHandle)
+        {
+            _flaUi.RegisterExcludedWindow(mainWindowHandle);
+        }
+
+        if (_overlay.NativeWindowHandle is ulong overlayHandle)
+        {
+            _flaUi.RegisterExcludedWindow(overlayHandle);
+        }
+    }
+
+    private void UnregisterOwnedWindowHandles()
+    {
+        if (_flaUi is null)
+        {
+            return;
+        }
+
+        if (_mainWindowHandle is ulong mainWindowHandle)
+        {
+            _flaUi.UnregisterExcludedWindow(mainWindowHandle);
+        }
+
+        if (_overlay.NativeWindowHandle is ulong overlayHandle)
+        {
+            _flaUi.UnregisterExcludedWindow(overlayHandle);
+        }
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_allowClose)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
         {
             return;
         }
 
         _closing = true;
+        _finderActive = 0;
         _finderTimer?.Stop();
-        _coordinator?.DisposeAsync().GetAwaiter().GetResult();
-        _flaUi?.Dispose();
-        _target?.Dispose();
+        FinderButton.IsEnabled = false;
+        FixButton.IsEnabled = false;
+        BackButton.IsEnabled = false;
+        _shutdownTask = ShutdownAndCloseAsync();
+    }
+
+    private async Task ShutdownAndCloseAsync()
+    {
+        Exception? cleanupError = null;
+        try
+        {
+            try
+            {
+                await _startupTask.ConfigureAwait(true);
+            }
+            catch (Exception exception)
+            {
+                cleanupError = exception;
+            }
+
+            _finderTimer?.Stop();
+            if (_coordinator is not null)
+            {
+                _coordinator.StateChanged -= CoordinatorOnStateChanged;
+                var coordinator = _coordinator;
+                _coordinator = null;
+                try
+                {
+                    await coordinator.DisposeAsync().ConfigureAwait(true);
+                }
+                catch (Exception exception)
+                {
+                    cleanupError ??= exception;
+                }
+            }
+
+            // The coordinator has invalidated all queued generations. Close the
+            // concrete WPF window on the WPF dispatcher before releasing FlaUI.
+            UnregisterOwnedWindowHandles();
+            try
+            {
+                _overlay.Close();
+            }
+            catch (Exception exception)
+            {
+                cleanupError ??= exception;
+            }
+
+            if (_flaUi is not null)
+            {
+                var flaUi = _flaUi;
+                _flaUi = null;
+                try
+                {
+                    await flaUi.DisposeAsync().ConfigureAwait(true);
+                }
+                catch (Exception exception)
+                {
+                    cleanupError ??= exception;
+                }
+            }
+
+            if (_target is not null)
+            {
+                var target = _target;
+                _target = null;
+                try
+                {
+                    await target.DisposeAsync().ConfigureAwait(true);
+                }
+                catch (Exception exception)
+                {
+                    cleanupError ??= exception;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            cleanupError ??= exception;
+        }
+        finally
+        {
+            if (cleanupError is not null)
+            {
+                ErrorText.Text = $"Shutdown cleanup: {cleanupError.Message}";
+            }
+
+            _allowClose = true;
+            Close();
+            Application.Current.Shutdown();
+        }
     }
 
     [DllImport("user32.dll")]

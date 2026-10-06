@@ -7,6 +7,8 @@ internal sealed class FlaUiMtaExecutor : IDisposable
     private readonly BlockingCollection<IWorkItem> _queue = new();
     private readonly Thread _thread;
     private readonly Action _onThreadExited;
+    private readonly TaskCompletionSource<object?> _threadExited =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
     private int _poisoned;
 
@@ -81,7 +83,7 @@ internal sealed class FlaUiMtaExecutor : IDisposable
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
@@ -91,12 +93,26 @@ internal sealed class FlaUiMtaExecutor : IDisposable
         _queue.CompleteAdding();
         if (!IsPoisoned && Thread.CurrentThread != _thread)
         {
-            _thread.Join(TimeSpan.FromSeconds(2));
-            _queue.Dispose();
+            try
+            {
+                await _threadExited.Task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                _queue.Dispose();
+            }
+            catch (TimeoutException)
+            {
+                // A normal dispose may still encounter an unmanaged call that
+                // exceeded the bounded worker lifetime. Leave the queue and
+                // worker-owned UIA resources for the worker's eventual exit.
+            }
         }
         // A poisoned worker may still be inside an unmanaged UIA call. Do not
         // dispose its queue or automation objects from this thread; the worker
         // owns their eventual teardown boundary.
+    }
+
+    public void Dispose()
+    {
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     private void Run()
@@ -110,7 +126,14 @@ internal sealed class FlaUiMtaExecutor : IDisposable
         }
         finally
         {
-            _onThreadExited();
+            try
+            {
+                _onThreadExited();
+            }
+            finally
+            {
+                _threadExited.TrySetResult(null);
+            }
         }
     }
 

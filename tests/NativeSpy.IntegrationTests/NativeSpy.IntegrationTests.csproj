@@ -27,7 +27,11 @@
     <ProjectReference Include="..\..\src\NativeSpy.ObjectSpy\NativeSpy.ObjectSpy.csproj" />
     <ProjectReference Include="..\..\src\NativeSpy.Protocol\NativeSpy.Protocol.csproj" />
     <TestTargetProjectReference Include="..\NativeSpy.TestTarget.WinForms\NativeSpy.TestTarget.WinForms.csproj" />
+    <ObjectSpyAppProjectReference Include="..\..\src\NativeSpy.ObjectSpy.App\NativeSpy.ObjectSpy.App.csproj" />
     <ProjectReference Include="@(TestTargetProjectReference)">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="@(ObjectSpyAppProjectReference)">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
   </ItemGroup>
@@ -41,6 +45,18 @@
     <Copy
       SourceFiles="@(TestTargetArtifacts)"
       DestinationFiles="@(TestTargetArtifacts->'$(OutputPath)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyObjectSpyAppArtifacts" AfterTargets="Build">
+    <MSBuild
+      Projects="@(ObjectSpyAppProjectReference)"
+      Targets="GetNativeSpyObjectSpyAppArtifacts"
+      Properties="Configuration=$(Configuration);Platform=$(Platform)">
+      <Output TaskParameter="TargetOutputs" ItemName="ObjectSpyAppArtifacts" />
+    </MSBuild>
+    <Copy
+      SourceFiles="@(ObjectSpyAppArtifacts)"
+      DestinationFiles="@(ObjectSpyAppArtifacts->'$(OutputPath)%(RecursiveDir)%(Filename)%(Extension)')"
       SkipUnchangedFiles="true" />
   </Target>
 </Project>
