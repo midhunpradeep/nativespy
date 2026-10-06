@@ -39,7 +39,9 @@ internal sealed class TestTargetProcess : IDisposable
 
     public NamedPipeClientSession Session => _session;
 
-    public static TestTargetProcess Start()
+    public bool HasExited => _process.HasExited;
+
+    public static TestTargetProcess Start(IReadOnlyDictionary<string, string>? environment = null)
     {
         var targetAssembly = Path.Combine(
             AppContext.BaseDirectory,
@@ -59,6 +61,13 @@ internal sealed class TestTargetProcess : IDisposable
             WorkingDirectory = AppContext.BaseDirectory
         };
         startInfo.ArgumentList.Add(targetAssembly);
+        if (environment is not null)
+        {
+            foreach (var pair in environment)
+            {
+                startInfo.Environment[pair.Key] = pair.Value;
+            }
+        }
 
         var process = new Process { StartInfo = startInfo };
         if (!process.Start())

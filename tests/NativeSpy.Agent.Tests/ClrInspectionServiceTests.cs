@@ -110,6 +110,39 @@ public sealed class ClrInspectionServiceTests
     }
 
     [Fact]
+    public void Member_shapes_include_inherited_instance_members_and_exclude_unsupported_members()
+    {
+        using var session = new ClrAgentSession();
+        using var service = new ClrInspectionService(session);
+        var target = new MemberShapeTarget();
+        var reference = AssertRegistration(session.Register(target));
+
+        var members = AssertSuccess(service.ListMembers(
+            new ListMembersRequestDto(reference, 128, ClrMemberKindFilter.All))).Members;
+
+        Assert.Contains(members, member => member.Name == nameof(MemberShapeBase.InheritedField));
+        Assert.Contains(members, member => member.Name == nameof(MemberShapeBase.InheritedProperty));
+        Assert.Equal(2, members.Count(member => member.Name == nameof(MemberShapeBase.HiddenField)));
+        Assert.Equal(2, members.Count(member => member.Name == nameof(MemberShapeBase.HiddenProperty)));
+        Assert.DoesNotContain(members, member => member.Name == "PrivateField");
+        Assert.DoesNotContain(members, member => member.Name == nameof(MemberShapeTarget.StaticField));
+        Assert.DoesNotContain(members, member => member.Name == nameof(MemberShapeTarget.WriteOnly));
+        Assert.DoesNotContain(members, member => member.Name == "Item");
+
+        var fields = members.Where(member => member.Kind == ClrMemberKind.Field).ToArray();
+        var results = AssertSuccess(service.ReadFieldValues(
+            new ReadFieldValuesRequestDto(reference, fields.Select(member => member.Member))));
+        var arrayResult = Assert.Single(results.Results, result =>
+            fields.Single(member => member.Member.MemberId == result.Member.MemberId).Name
+            == nameof(MemberShapeTarget.ArrayField));
+        var collectionResult = Assert.Single(results.Results, result =>
+            fields.Single(member => member.Member.MemberId == result.Member.MemberId).Name
+            == nameof(MemberShapeTarget.CollectionField));
+        Assert.Equal(ClrValueKind.ObjectReference, arrayResult.Value!.Kind);
+        Assert.Equal(ClrValueKind.ObjectReference, collectionResult.Value!.Kind);
+    }
+
+    [Fact]
     public async Task Property_reads_are_explicit_and_detach_target_exception_identity()
     {
         using var session = new ClrAgentSession();
@@ -266,6 +299,31 @@ public sealed class ClrInspectionServiceTests
     private sealed class InspectionChild
     {
         public int Number = 2;
+    }
+
+    private class MemberShapeBase
+    {
+        public string InheritedField = "inherited field";
+        public string HiddenField = "base hidden field";
+        public string InheritedProperty => "inherited property";
+        public string HiddenProperty => "base hidden property";
+    }
+
+    private sealed class MemberShapeTarget : MemberShapeBase
+    {
+        public MemberShapeTarget()
+        {
+            _ = PrivateField;
+        }
+
+        public new string HiddenField = "derived hidden field";
+        public new string HiddenProperty => "derived hidden property";
+        public static string StaticField = "static";
+        private string PrivateField = "private";
+        public string[] ArrayField = { "array" };
+        public List<int> CollectionField = new() { 1, 2 };
+        public string WriteOnly { set { } }
+        public string this[int index] => index.ToString();
     }
 
     private enum InspectionEnum

@@ -81,7 +81,35 @@ internal sealed class MainForm : Form
         get
         {
             GetterReads++;
+            SignalGetterEvent("NATIVESPY_COUNTING_GETTER_EVENT");
             return "getter value";
+        }
+    }
+
+    public string BlockingProperty
+    {
+        get
+        {
+            SignalGetterEvent("NATIVESPY_BLOCKING_GETTER_STARTED_EVENT");
+            var releaseName = Environment.GetEnvironmentVariable("NATIVESPY_BLOCKING_GETTER_RELEASE_EVENT");
+            if (!string.IsNullOrWhiteSpace(releaseName))
+            {
+                using var release = EventWaitHandle.OpenExisting(releaseName);
+                release.WaitOne();
+            }
+
+            SignalGetterEvent("NATIVESPY_BLOCKING_GETTER_FINISHED_EVENT");
+            return "blocking getter value";
+        }
+    }
+
+    private static void SignalGetterEvent(string variableName)
+    {
+        var eventName = Environment.GetEnvironmentVariable(variableName);
+        if (!string.IsNullOrWhiteSpace(eventName))
+        {
+            using var signal = EventWaitHandle.OpenExisting(eventName);
+            signal.Set();
         }
     }
 

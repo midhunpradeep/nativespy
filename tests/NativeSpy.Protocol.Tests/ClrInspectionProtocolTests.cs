@@ -11,6 +11,35 @@ namespace NativeSpy.Protocol.Tests;
 public sealed class ClrInspectionProtocolTests
 {
     [Fact]
+    public void List_members_response_exposes_no_total_cardinality_field()
+    {
+        var response = new ListMembersResponseDto(
+            new[]
+            {
+                new MemberDescriptorDto(
+                    new MemberRefDto("session", "member", "boundary", "type"),
+                    ClrMemberKind.Field,
+                    "Field",
+                    new TypeRefDto("int", "boundary"),
+                    "System.Int32 Field")
+            },
+            "continuation");
+
+        using var document = JsonDocument.Parse(
+            ClrInspectionJsonCodec.SerializeListMembersResponse(response).GetRawText());
+        var propertyNames = document.RootElement.EnumerateObject()
+            .Select(property => property.Name)
+            .ToArray();
+
+        Assert.Equal(new[] { "members", "nextContinuationToken" }, propertyNames);
+        Assert.DoesNotContain(propertyNames, name =>
+            string.Equals(name, "total", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "totalCount", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "memberCount", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "count", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Clr_values_round_trip_with_their_closed_union_branch()
     {
         var member = new MemberRefDto("session", "member", "boundary", "type");

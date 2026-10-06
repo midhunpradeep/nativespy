@@ -15,6 +15,22 @@ public sealed class ObjectSpyCoordinatorTests
     private const int ProcessId = 4321;
     private static readonly Point ScreenPoint = new(10, 20);
 
+    [Theory]
+    [InlineData(-1920, -120, 640, 480)]
+    [InlineData(-1, 0, 1, 1)]
+    [InlineData(1920, 1440, 800, 600)]
+    public void Overlay_geometry_preserves_signed_physical_screen_coordinates(
+        int x,
+        int y,
+        int width,
+        int height)
+    {
+        var bounds = new Rectangle(x, y, width, height);
+        var geometry = new ObjectSpyOverlayGeometry(bounds);
+
+        Assert.Equal(bounds, geometry.Bounds);
+    }
+
     [Fact]
     public async Task A_failed_new_freeze_preserves_the_last_healthy_graph_and_quarantines_the_session()
     {
