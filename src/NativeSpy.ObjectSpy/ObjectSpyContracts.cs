@@ -28,6 +28,11 @@ public enum ObjectSpyClrState
     Collected
 }
 
+/// <summary>
+/// Detached overlay bounds in physical desktop pixels. The rectangle is not a WPF
+/// device-independent-unit rectangle; signed coordinates are valid for monitors
+/// positioned left of or above the primary display.
+/// </summary>
 public sealed class ObjectSpyOverlayGeometry
 {
     public ObjectSpyOverlayGeometry(Rectangle bounds)

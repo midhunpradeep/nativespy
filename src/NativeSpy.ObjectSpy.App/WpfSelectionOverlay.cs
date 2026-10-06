@@ -23,6 +23,12 @@ internal sealed class WpfSelectionOverlay : IObjectSpyOverlay
     private readonly Rectangle _rectangle;
     private long _generation;
 
+    public event Action<ulong>? NativeWindowCreated;
+
+    public event Action<ulong>? NativeWindowDestroyed;
+
+    public ulong? NativeWindowHandle { get; private set; }
+
     public WpfSelectionOverlay()
     {
         _rectangle = new Rectangle
@@ -46,7 +52,8 @@ internal sealed class WpfSelectionOverlay : IObjectSpyOverlay
             Content = canvas,
             IsHitTestVisible = false
         };
-        _window.SourceInitialized += (_, _) => ConfigureWindowStyle();
+        _window.SourceInitialized += WindowOnSourceInitialized;
+        _window.Closed += WindowOnClosed;
     }
 
     public void ShowPreview(ObjectSpyOverlayGeometry geometry, long generation)
@@ -70,6 +77,10 @@ internal sealed class WpfSelectionOverlay : IObjectSpyOverlay
         }
 
         var handle = new WindowInteropHelper(_window).Handle;
+        // FlaUI/UIA BoundingRectangle and GetCursorPos use physical desktop pixels.
+        // SetWindowPos also consumes physical screen pixels, including signed
+        // coordinates on monitors left/above the primary display; no WPF DIP
+        // conversion belongs on this native placement boundary.
         SetWindowPos(
             handle,
             HwndTopmost,
@@ -78,6 +89,7 @@ internal sealed class WpfSelectionOverlay : IObjectSpyOverlay
             Math.Max(1, bounds.Width),
             Math.Max(1, bounds.Height),
             SwpNoActivate | SwpNoOwnerZOrder | SwpShowWindow);
+
         _window.UpdateLayout();
     }
 
@@ -98,6 +110,47 @@ internal sealed class WpfSelectionOverlay : IObjectSpyOverlay
         if (_window.IsVisible)
         {
             _window.Hide();
+        }
+    }
+
+    public void Close()
+    {
+        if (!_window.Dispatcher.CheckAccess())
+        {
+            _window.Dispatcher.BeginInvoke(Close);
+            return;
+        }
+
+        ++_generation;
+        if (_window.IsVisible)
+        {
+            _window.Hide();
+        }
+
+        if (_window.IsLoaded)
+        {
+            _window.Close();
+        }
+    }
+
+    private void WindowOnSourceInitialized(object? sender, EventArgs e)
+    {
+        ConfigureWindowStyle();
+        var handle = new WindowInteropHelper(_window).Handle;
+        if (handle != IntPtr.Zero)
+        {
+            NativeWindowHandle = unchecked((ulong)handle.ToInt64());
+            NativeWindowCreated?.Invoke(NativeWindowHandle.Value);
+        }
+    }
+
+    private void WindowOnClosed(object? sender, EventArgs e)
+    {
+        var handle = NativeWindowHandle;
+        NativeWindowHandle = null;
+        if (handle is ulong nativeHandle)
+        {
+            NativeWindowDestroyed?.Invoke(nativeHandle);
         }
     }
 

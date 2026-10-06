@@ -3,6 +3,10 @@ using NativeSpy.Protocol.Common;
 
 namespace NativeSpy.FlaUI;
 
+/// <summary>
+/// Detached UI Automation facts. <see cref="ScreenPoint"/> and <see cref="Bounds"/>
+/// are physical desktop pixels, matching Win32 cursor and native window-placement APIs.
+/// </summary>
 public sealed class FlaUiSelectionObservation
 {
     public FlaUiSelectionObservation(

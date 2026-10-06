@@ -104,6 +104,10 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         {
             SetPreviewState(stamp, ObjectSpySelectionState.Abandoned, "Preview abandoned.");
         }
+        catch (FlaUiExcludedWindowException)
+        {
+            SetExcludedPreviewState(stamp);
+        }
         catch (FlaUiSessionException exception)
         {
             SetPreviewState(
@@ -234,6 +238,10 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             SetFreezeState(attempt, ObjectSpySelectionState.Abandoned, "Freeze abandoned.");
+        }
+        catch (FlaUiExcludedWindowException)
+        {
+            SetExcludedFreezeState(attempt);
         }
         catch (FlaUiSessionException exception)
         {
@@ -784,6 +792,34 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         }
     }
 
+    private void SetExcludedPreviewState(PreviewStamp stamp)
+    {
+        lock (_gate)
+        {
+            if (_externalOperationEpoch != stamp.ExternalEpoch
+                || _previewEpoch != stamp.PreviewEpoch)
+            {
+                return;
+            }
+
+            _previewActive = false;
+            _state.PreviewObservation = null;
+            if (_frozenSelection is null)
+            {
+                _state.SelectionState = ObjectSpySelectionState.Idle;
+                _state.Error = null;
+            }
+            else
+            {
+                _state.SelectionState = _committedSelectionState;
+                _state.Error = _committedSelectionError;
+            }
+        }
+
+        _overlay.Clear(stamp.OverlayGeneration);
+        PublishStateChanged();
+    }
+
     private void SetPreviewState(
         PreviewStamp stamp,
         ObjectSpySelectionState state,
@@ -847,6 +883,32 @@ public sealed class ObjectSpyCoordinator : IAsyncDisposable
         _state.Members = snapshot.Members;
         _state.NextContinuationToken = snapshot.NextContinuationToken;
         _state.FieldResults = snapshot.FieldResults;
+    }
+
+    private void SetExcludedFreezeState(FreezeStamp stamp)
+    {
+        lock (_gate)
+        {
+            if (_externalOperationEpoch != stamp.ExternalEpoch)
+            {
+                return;
+            }
+
+            _previewActive = false;
+            _state.PreviewObservation = null;
+            if (_frozenSelection is null)
+            {
+                _state.SelectionState = ObjectSpySelectionState.Idle;
+                _state.Error = null;
+            }
+            else
+            {
+                _state.SelectionState = _committedSelectionState;
+                _state.Error = _committedSelectionError;
+            }
+        }
+
+        PublishStateChanged();
     }
 
     private void SetFreezeState(

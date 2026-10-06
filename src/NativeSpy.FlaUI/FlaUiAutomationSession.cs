@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using FlaUI.Core;
@@ -10,7 +11,7 @@ namespace NativeSpy.FlaUI;
 /// <summary>
 /// UIA3 session whose automation and live elements are owned by one dedicated MTA worker.
 /// </summary>
-public sealed class FlaUiAutomationSession : IDisposable
+public sealed class FlaUiAutomationSession : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(5);
     private readonly FlaUiMtaExecutor _executor;
@@ -18,6 +19,8 @@ public sealed class FlaUiAutomationSession : IDisposable
     private readonly UIA3Automation _automation;
     private readonly int _processId;
     private readonly object _gate = new();
+    private readonly object _excludedWindowGate = new();
+    private readonly Dictionary<ulong, int> _excludedWindows = new();
     private bool _quarantineReserved;
     private int _resourcesDisposed;
     private int _disposed;
@@ -37,6 +40,43 @@ public sealed class FlaUiAutomationSession : IDisposable
     public int ProcessId => _processId;
 
     public bool IsPoisoned => _executor.IsPoisoned;
+
+    /// <summary>
+    /// Registers a native top-level window owned by the client as unavailable to point acquisition.
+    /// Only the detached HWND value is retained. Candidate child elements are excluded through their
+    /// native root HWND, not through titles, classes, or UI Automation objects.
+    /// </summary>
+    public void RegisterExcludedWindow(ulong hwnd)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        if (hwnd == 0 || hwnd > long.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(hwnd));
+        }
+
+        var nativeHwnd = new IntPtr(unchecked((long)hwnd));
+        var ownerProcessId = GetWindowProcessId(nativeHwnd);
+        lock (_excludedWindowGate)
+        {
+            _excludedWindows[hwnd] = ownerProcessId;
+        }
+    }
+
+    /// <summary>
+    /// Removes a previously registered native window from point-acquisition exclusion.
+    /// </summary>
+    public void UnregisterExcludedWindow(ulong hwnd)
+    {
+        if (hwnd == 0)
+        {
+            return;
+        }
+
+        lock (_excludedWindowGate)
+        {
+            _excludedWindows.Remove(hwnd);
+        }
+    }
 
     public static FlaUiAutomationSession Attach(int processId)
     {
@@ -103,13 +143,23 @@ public sealed class FlaUiAutomationSession : IDisposable
             });
     }
 
+    /// <summary>
+    /// Acquires the UIA element at a physical desktop pixel coordinate. UIA
+    /// bounding rectangles returned in the detached observation use the same
+    /// physical desktop-pixel contract for direct native overlay placement.
+    /// </summary>
     public async Task<FlaUiSelectionObservation> PreviewFromPointAsync(
         Point screenPoint,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         return await ExecuteAsync(
-                () => CreateObservation(_automation.FromPoint(screenPoint), screenPoint),
+                () =>
+                {
+                    var observation = CreateObservation(_automation.FromPoint(screenPoint), screenPoint);
+                    ThrowIfExcluded(observation);
+                    return observation;
+                },
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -125,6 +175,7 @@ public sealed class FlaUiAutomationSession : IDisposable
                     var element = _automation.FromPoint(screenPoint)
                         ?? throw new InvalidOperationException("UI Automation returned no element at the requested point.");
                     var observation = CreateObservation(element, screenPoint);
+                    ThrowIfExcluded(observation);
                     if (!observation.IsAvailable
                         || observation.CandidateProcessId != _processId)
                     {
@@ -171,18 +222,23 @@ public sealed class FlaUiAutomationSession : IDisposable
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
+        lock (_excludedWindowGate)
+        {
+            _excludedWindows.Clear();
+        }
+
         if (!_executor.IsPoisoned)
         {
             try
             {
-                _executor.InvokeWithTimeoutAsync(
+                await _executor.InvokeWithTimeoutAsync(
                         () =>
                         {
                             DisposeResourcesOnWorker();
@@ -190,8 +246,7 @@ public sealed class FlaUiAutomationSession : IDisposable
                         },
                         OperationTimeout,
                         CancellationToken.None)
-                    .GetAwaiter()
-                    .GetResult();
+                    .ConfigureAwait(false);
             }
             catch
             {
@@ -206,7 +261,12 @@ public sealed class FlaUiAutomationSession : IDisposable
             }
         }
 
-        _executor.Dispose();
+        await _executor.DisposeAsync().ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     private async Task<T> ExecuteWithTimeoutAsync<T>(
@@ -236,6 +296,44 @@ public sealed class FlaUiAutomationSession : IDisposable
             }
 
             throw;
+        }
+    }
+
+    private void ThrowIfExcluded(FlaUiSelectionObservation observation)
+    {
+        if ((observation.CandidateHwnd is ulong candidateHwnd && IsExcludedWindow(candidateHwnd))
+            || (observation.RootHwnd is ulong rootHwnd && IsExcludedWindow(rootHwnd)))
+        {
+            throw new FlaUiExcludedWindowException(
+                "The UI Automation candidate belongs to a window excluded from the ObjectSpy finder.");
+        }
+    }
+
+    private bool IsExcludedWindow(ulong hwnd)
+    {
+        if (hwnd == 0 || hwnd > long.MaxValue)
+        {
+            return false;
+        }
+
+        var nativeHwnd = new IntPtr(unchecked((long)hwnd));
+        lock (_excludedWindowGate)
+        {
+            if (!_excludedWindows.TryGetValue(hwnd, out var registeredOwnerProcessId))
+            {
+                return false;
+            }
+
+            var currentOwnerProcessId = GetWindowProcessId(nativeHwnd);
+            if (currentOwnerProcessId == 0
+                || !IsWindow(nativeHwnd)
+                || currentOwnerProcessId != registeredOwnerProcessId)
+            {
+                _excludedWindows.Remove(hwnd);
+                return false;
+            }
+
+            return true;
         }
     }
 
@@ -341,6 +439,26 @@ public sealed class FlaUiAutomationSession : IDisposable
         }
     }
 
+    private static int GetWindowProcessId(IntPtr hwnd)
+    {
+        _ = GetWindowThreadProcessId(hwnd, out var processId);
+        return unchecked((int)processId);
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool IsWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+}
+
+public sealed class FlaUiExcludedWindowException : Exception
+{
+    public FlaUiExcludedWindowException(string message)
+        : base(message)
+    {
+    }
 }
