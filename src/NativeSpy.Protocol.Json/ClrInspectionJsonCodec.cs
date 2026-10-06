@@ -363,7 +363,7 @@ public static class ClrInspectionJsonCodec
 
         return new TargetExceptionDto(
             ProtocolJsonCodec.FromWire(wire.ExceptionType),
-            wire.WasReflectionWrapper);
+            Required(wire.WasReflectionWrapper, "wasReflectionWrapper"));
     }
 
     private static StructFieldWire ToWire(ClrStructFieldDto field)

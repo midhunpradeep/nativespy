@@ -247,6 +247,24 @@ public sealed class NamedPipeClientMalformedClrResponseTests
     }
 
     [Fact]
+    public Task Missing_type_identity_is_value_type_uses_terminal_protocol_failure_policy()
+    {
+        var missingIsValueType = ManagedObjectJson()
+            .Replace(",\"isValueType\":false", string.Empty, StringComparison.Ordinal);
+        return AssertMalformedResponseTerminalAsync(
+            "clr.describeObject",
+            DescribeResponse(missingIsValueType));
+    }
+
+    [Fact]
+    public Task Missing_target_exception_wrapper_flag_uses_terminal_protocol_failure_policy()
+    {
+        return AssertMalformedResponseTerminalAsync(
+            "clr.readPropertyValue",
+            TargetFailedPropertyResponse(includeWrapper: false));
+    }
+
+    [Fact]
     public async Task Missing_type_identity_collection_uses_terminal_protocol_failure_policy()
     {
         await AssertMalformedResponseTerminalAsync(
@@ -449,6 +467,15 @@ public sealed class NamedPipeClientMalformedClrResponseTests
     private static string PropertyResponse(string member, string outcome)
     {
         return "{\"result\":{\"member\":" + member + ",\"outcome\":\"" + outcome + "\"}}";
+    }
+
+    private static string TargetFailedPropertyResponse(bool includeWrapper)
+    {
+        var wrapper = includeWrapper ? ",\"wasReflectionWrapper\":false" : string.Empty;
+        return "{\"result\":{\"member\":" + MemberJsonReference("member")
+            + ",\"outcome\":\"TargetFailed\",\"targetException\":{\"exceptionType\":{\"typeId\":\"exception\",\"fullName\":\"Example.Exception\",\"assemblySimpleName\":\"Example\",\"boundaryId\":\"boundary\",\"isValueType\":false,\"genericArguments\":[],\"interfaces\":[]}"
+            + wrapper
+            + "}}}";
     }
 
     private static string FieldUnavailableResponse(

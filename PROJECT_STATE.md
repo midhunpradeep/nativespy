@@ -37,6 +37,7 @@
 - `NativeSpy.ObjectSpy` Exact-only coordinator with transactional freeze candidates, separate preview/committed UIA facts, quarantine-preserving CLR state, independent CLR navigation epochs, lazy property reads, member paging, bounded field batches, explicit object-reference navigation, late-result rejection, and overlay port;
 - runnable WPF-only client `NativeSpy.ObjectSpy.App` with SourceInitialized main-window registration, overlay HWND lifecycle registration, a nonactivating click-through overlay, asynchronous bounded shutdown, and controlled synthetic WinForms target bootstrap;
 - semantic protocol/value validation including request-relative CLR success comparators, terminal unknown-code/impossible-success handling with recoverable typed operation failures, required CLR wire-collection presence, nested malformed CLR-wire rejection, malformed-success client/session policy, no-total `clr.listMembers` wire-shape proof, Agent value/lifetime/member-shape and collectible-ALC proof that exercises `MemberIdentityRegistry`, malformed-request session survival, visible CLR protocol-failure state, deterministic preview/freeze/candidate race and quarantine tests, WPF finder disablement after UIA quarantine, FlaUI normal-failure versus hard-timeout coverage, live point-preview/self-exclusion proof, real HWND-less WPF-child UIA-ancestry/exclusion proof, and executable shutdown proof;
+- strict wire-presence audit for required primitive fields, including `TypeIdentity.isValueType`, `TargetException.wasReflectionWrapper`, handshake/capability/limit/identity/handle/page-size numerics, with intentional sparse `structTruncated`/`structNotExpanded` flags and omission-safe unknown callback counts preserved;
 
 ## Not implemented / deferred
 
@@ -59,7 +60,7 @@
 - TFMs: Protocol `netstandard2.0`; Agent/Agent.Tests `net10.0`; Client `net10.0`; UI/target/integration projects `net10.0-windows`;
 - Platform: x64 Windows for the live UI path;
 - Build: passing with 0 warnings and 0 errors;
-- Tests: 263 passing, 0 skipped in the verified environment (95 Protocol, 22 Agent, 64 Client, 2 Agent.WinForms, 2 FlaUI, 78 integration).
+- Tests: 293 passing, 0 skipped in the verified environment (107 Protocol, 23 Agent, 64 Client, 2 Agent.WinForms, 2 FlaUI, 95 integration).
 
 ## Known limitations
 

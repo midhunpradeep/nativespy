@@ -426,6 +426,119 @@ public sealed class ClrInspectionProtocolTests
     }
 
     [Fact]
+    public void List_members_page_size_is_required_at_the_wire_boundary()
+    {
+        using var document = JsonDocument.Parse(
+            $"{{\"object\":{ManagedObjectJson()},\"filter\":\"All\",\"continuationToken\":null}}");
+
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.ReadListMembersPayload(document.RootElement));
+    }
+
+    [Fact]
+    public void Type_identity_is_value_type_requires_wire_presence_in_all_common_clr_shapes()
+    {
+        var explicitFalse = TypeIdentityJson("Reference", isValueType: false);
+        var explicitTrue = TypeIdentityJson("Value", isValueType: true);
+        Assert.False(DecodeValue(EnumJsonWithType(explicitFalse)).EnumType!.IsValueType);
+        Assert.True(DecodeValue(EnumJsonWithType(explicitTrue)).EnumType!.IsValueType);
+
+        var serializedType = new TypeIdentityDto(
+            "reference",
+            "Reference",
+            "assembly",
+            "boundary",
+            isValueType: false,
+            Array.Empty<TypeRefDto>(),
+            Array.Empty<TypeRefDto>());
+        var serializedReference = new ManagedObjectRefDto(
+            new HandleRefDto("session", "object", 1, HandleKind.ClrObject, "boundary"),
+            serializedType,
+            "boundary");
+        var serializedDescribe = ClrInspectionJsonCodec.SerializeDescribeObjectResponse(
+            new DescribeObjectResponseDto(serializedReference));
+        Assert.Contains("\"isValueType\":false", serializedDescribe.GetRawText(), StringComparison.Ordinal);
+
+        Assert.Equal(ClrValueKind.ObjectReference, DecodeValue(ObjectReferenceValueJson(explicitFalse)).Kind);
+        Assert.Equal(ClrValueKind.TypeObject, DecodeValue(TypeObjectValueJson(explicitFalse)).Kind);
+        Assert.Equal(ClrValueKind.ValueType, DecodeValue(ValueTypeJson("Value", string.Empty, notExpanded: true)).Kind);
+
+        var missing = RemoveProperty(explicitFalse, "isValueType");
+        AssertInvalidValue(EnumJsonWithType(missing));
+        AssertInvalidValue(ObjectReferenceValueJson(missing));
+        AssertInvalidValue(TypeObjectValueJson(missing));
+        AssertInvalidValue(
+            $"{{\"kind\":\"ValueType\",\"valueType\":{missing},\"structFields\":[],\"structTruncated\":false,\"structNotExpanded\":true}}");
+
+        using var describe = JsonDocument.Parse(DescribeResponseJson(missing));
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeDescribeObjectResponse(describe.RootElement));
+
+        using var targetFailure = JsonDocument.Parse(TargetFailedResponse(missing, wasReflectionWrapper: false));
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse(targetFailure.RootElement));
+    }
+
+    [Fact]
+    public void Target_exception_wrapper_flag_requires_presence_and_preserves_both_boolean_values()
+    {
+        var exceptionType = TypeIdentityJson("Exception", isValueType: false);
+        var notWrapped = DeserializeTargetFailure(
+            TargetFailedResponse(exceptionType, wasReflectionWrapper: false));
+        Assert.False(notWrapped.TargetException!.WasReflectionWrapper);
+
+        var wrapped = DeserializeTargetFailure(
+            TargetFailedResponse(exceptionType, wasReflectionWrapper: true));
+        Assert.True(wrapped.TargetException!.WasReflectionWrapper);
+
+        var serialized = ClrInspectionJsonCodec.SerializeReadPropertyValueResponse(
+            new ReadPropertyValueResponseDto(
+                new MemberReadResultDto(
+                    new MemberRefDto("session", "member", "boundary", "type"),
+                    ClrReadOutcome.TargetFailed,
+                    targetException: new TargetExceptionDto(
+                        new TypeIdentityDto(
+                            "exception",
+                            "Example.Exception",
+                            "assembly",
+                            "boundary",
+                            isValueType: false,
+                            Array.Empty<TypeRefDto>(),
+                            Array.Empty<TypeRefDto>()),
+                        wasReflectionWrapper: false))));
+        Assert.Contains("\"wasReflectionWrapper\":false", serialized.GetRawText(), StringComparison.Ordinal);
+
+        using var missing = JsonDocument.Parse(
+            TargetFailedResponse(exceptionType, wasReflectionWrapper: null));
+        Assert.Throws<ProtocolJsonException>(() =>
+            ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse(missing.RootElement));
+    }
+
+    [Fact]
+    public void Value_type_sparse_boolean_flags_omit_false_but_decode_explicit_true()
+    {
+        var omitted = RemoveProperty(
+            RemoveProperty(
+                ValueTypeJson("Root", string.Empty),
+                "structTruncated"),
+            "structNotExpanded");
+        var omittedDecoded = DecodeValue(omitted);
+        Assert.False(omittedDecoded.StructTruncated);
+        Assert.False(omittedDecoded.StructNotExpanded);
+
+        var explicitNotExpanded = DecodeValue(
+            ValueTypeJson("Root", string.Empty, notExpanded: true));
+        Assert.True(explicitNotExpanded.StructNotExpanded);
+
+        var explicitTruncated = DecodeValue(
+            ValueTypeJson(
+                "Root",
+                StructFieldJson("Number", "{\"kind\":\"Null\"}"),
+                truncated: true));
+        Assert.True(explicitTruncated.StructTruncated);
+    }
+
+    [Fact]
     public void Nested_wire_objects_with_missing_required_properties_are_protocol_errors()
     {
         var malformedManagedObject = "{\"handle\":null,\"boundaryId\":\"boundary\",\"contextId\":\"context\"}";
@@ -559,6 +672,25 @@ public sealed class ClrInspectionProtocolTests
     private static string ReplaceEmptyArrayWithNullElement(string json, string propertyName)
     {
         return json.Replace($"\"{propertyName}\":[]", $"\"{propertyName}\":[null]", StringComparison.Ordinal);
+    }
+
+    private static string RemoveProperty(string json, string propertyName)
+    {
+        return json.Replace($",\"{propertyName}\":false", string.Empty, StringComparison.Ordinal);
+    }
+
+    private static MemberReadResultDto DeserializeTargetFailure(string responseJson)
+    {
+        using var document = JsonDocument.Parse(responseJson);
+        return ClrInspectionJsonCodec.DeserializeReadPropertyValueResponse(document.RootElement).Result;
+    }
+
+    private static string TargetFailedResponse(string exceptionTypeJson, bool? wasReflectionWrapper)
+    {
+        var wrapper = wasReflectionWrapper is bool value
+            ? $",\"wasReflectionWrapper\":{value.ToString().ToLowerInvariant()}"
+            : string.Empty;
+        return $"{{\"result\":{{\"member\":{{\"sessionId\":\"session\",\"memberId\":\"member\",\"boundaryId\":\"boundary\",\"declaringTypeId\":\"type\"}},\"outcome\":\"TargetFailed\",\"targetException\":{{\"exceptionType\":{exceptionTypeJson}{wrapper}}}}}}}";
     }
 
     private static string ValueTypeJson(

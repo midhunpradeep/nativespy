@@ -1106,7 +1106,8 @@ public static class ProtocolJsonCodec
             wire.FullName,
             wire.AssemblySimpleName,
             wire.BoundaryId,
-            wire.IsValueType,
+            wire.IsValueType
+                ?? throw new ProtocolJsonException("A type identity is missing isValueType."),
             ProtocolJsonCollection.MapRequiredElements(
                 wire.GenericArguments,
                 type => FromWire(type),

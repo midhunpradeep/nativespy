@@ -77,7 +77,7 @@ internal sealed class MemberReadResultWire
 internal sealed class TargetExceptionWire
 {
     public TypeIdentityWire? ExceptionType { get; set; }
-    public bool WasReflectionWrapper { get; set; }
+    public bool? WasReflectionWrapper { get; set; }
 }
 
 internal sealed class StructFieldWire
@@ -121,6 +121,7 @@ internal sealed class ClrValueWire
     public TypeIdentityWire? ValueType { get; set; }
     public StructFieldWire[]? StructFields { get; set; }
 
+    // Sparse expansion metadata: omission is the intentional false/default form.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool StructTruncated { get; set; }
 

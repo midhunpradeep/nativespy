@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using NativeSpy.Protocol.Common;
 using NativeSpy.Protocol.Correlation;
 using NativeSpy.Protocol.Json;
@@ -94,6 +95,82 @@ public sealed class ProtocolJsonCodecTests
     }
 
     [Fact]
+    public void Callback_count_known_is_intentionally_omission_safe()
+    {
+        var evidence = CreateFrameworkEvidence(
+            callbackDetails: new[] { new CallbackDetailDto("Paint") });
+        var json = JsonNode.Parse(
+            ProtocolJsonCodec.SerializeFrameworkEvidence(evidence).GetRawText())!.AsObject();
+        json["effects"]!["callbackDetails"]![0]!.AsObject().Remove("countKnown");
+
+        var decoded = ProtocolJsonCodec.DeserializeFrameworkEvidence(
+            JsonDocument.Parse(json.ToJsonString()).RootElement);
+        var callback = Assert.Single(decoded.Effects.CallbackDetails);
+        Assert.False(callback.CountKnown);
+        Assert.Null(callback.Count);
+    }
+
+    [Fact]
+    public void Required_framework_numeric_fields_reject_defaulting_omission()
+    {
+        var processId = JsonNode.Parse(
+            ProtocolJsonCodec.SerializeFrameworkEvidence(CreateFrameworkEvidence()).GetRawText())!.AsObject();
+        processId.Remove("processId");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeFrameworkEvidence(
+                JsonDocument.Parse(processId.ToJsonString()).RootElement));
+
+        var metadata = JsonNode.Parse(
+            ProtocolJsonCodec.SerializeFrameworkEvidence(
+                CreateFrameworkEvidence(
+                    adapterMetadata: new[]
+                    {
+                        new AdapterMetadataDto(
+                            "adapter",
+                            "schema",
+                            1,
+                            DetachedMetadataValueDto.Null())
+                    })).GetRawText())!.AsObject();
+        metadata["adapterMetadata"]![0]!.AsObject().Remove("schemaVersion");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeFrameworkEvidence(
+                JsonDocument.Parse(metadata.ToJsonString()).RootElement));
+
+        var handle = JsonNode.Parse(
+            ProtocolJsonCodec.SerializeFrameworkEvidence(
+                CreateFrameworkEvidence(
+                    candidateTarget: new CorrelationTargetRefDto(
+                        CorrelationTargetKind.FrameworkEntity,
+                        framework: new FrameworkEntityRefDto(
+                            "adapter",
+                            FrameworkEntityKind.GridCoordinate,
+                            liveHandle: new HandleRefDto(
+                                "session",
+                                "entity",
+                                1,
+                                HandleKind.AgentEntity,
+                                "boundary"))))).GetRawText())!.AsObject();
+        handle["candidateTarget"]!["framework"]!["liveHandle"]!.AsObject().Remove("generation");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeFrameworkEvidence(
+                JsonDocument.Parse(handle.ToJsonString()).RootElement));
+
+        var hwnd = JsonNode.Parse(
+            ProtocolJsonCodec.SerializeFrameworkEvidence(
+                CreateFrameworkEvidence(
+                    candidateTarget: new CorrelationTargetRefDto(
+                        CorrelationTargetKind.NativeEntity,
+                        native: new NativeEntityRefDto(
+                            NativeBoundaryKind.HwndShell,
+                            new HwndInfoDto(123, "hwnd-1"),
+                            processId: 42)))).GetRawText())!.AsObject();
+        hwnd["candidateTarget"]!["native"]!["hwndObservation"]!.AsObject().Remove("hwnd");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeFrameworkEvidence(
+                JsonDocument.Parse(hwnd.ToJsonString()).RootElement));
+    }
+
+    [Fact]
     public void Generic_request_payload_preserves_primitives_and_arrays()
     {
         var primitive = ProtocolJsonCodec.DeserializeRequest(Encoding.UTF8.GetBytes(
@@ -163,6 +240,88 @@ public sealed class ProtocolJsonCodecTests
     }
 
     [Fact]
+    public void Hello_capability_booleans_are_required_and_explicit_false_round_trips()
+    {
+        var response = new HelloResponseWire
+        {
+            SelectedProtocolVersion = 1,
+            SessionId = "session",
+            TargetProcessIdentity = new ProcessIdentityWire
+            {
+                ProcessId = 42,
+                ProcessStartIdentity = "100"
+            },
+            Capabilities = new CapabilitiesWire
+            {
+                SupportedOperations = Array.Empty<string>(),
+                AdapterIds = Array.Empty<string>(),
+                SingleClient = false,
+                ReconnectSupported = false
+            },
+            Limits = new LimitsWire
+            {
+                MaxFrameBytes = ProtocolWireConstants.DefaultMaximumFrameBytes,
+                MaxJsonDepth = ProtocolWireConstants.DefaultMaximumJsonDepth,
+                DefaultBudgetMs = 1000,
+                MaxBudgetMs = 1000,
+                MaxOutstandingRequests = 1
+            }
+        };
+
+        var json = JsonNode.Parse(
+            Encoding.UTF8.GetString(ProtocolJsonCodec.SerializeHelloResponse(response)))!.AsObject();
+        Assert.False(json["capabilities"]!["singleClient"]!.GetValue<bool>());
+        Assert.False(json["capabilities"]!["reconnectSupported"]!.GetValue<bool>());
+        var parsed = ProtocolJsonCodec.DeserializeHelloResponse(
+            Encoding.UTF8.GetBytes(json.ToJsonString()));
+        Assert.False(parsed.Capabilities.SingleClient);
+        Assert.False(parsed.Capabilities.ReconnectSupported);
+
+        var missingSingleClient = JsonNode.Parse(json.ToJsonString())!.AsObject();
+        missingSingleClient["capabilities"]!.AsObject().Remove("singleClient");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeHelloResponse(
+                Encoding.UTF8.GetBytes(missingSingleClient.ToJsonString())));
+
+        var missingReconnectSupported = JsonNode.Parse(json.ToJsonString())!.AsObject();
+        missingReconnectSupported["capabilities"]!.AsObject().Remove("reconnectSupported");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeHelloResponse(
+                Encoding.UTF8.GetBytes(missingReconnectSupported.ToJsonString())));
+    }
+
+    [Fact]
+    public void Required_protocol_numeric_fields_do_not_default_from_omission()
+    {
+        var bootstrap = JsonNode.Parse(
+            "{\"kind\":\"nativespy.bootstrap\",\"descriptorVersion\":1,\"pipeName\":\"p\",\"bootstrapNonce\":\"n\",\"targetProcessIdentity\":{\"processId\":1,\"processStartIdentity\":\"s\"},\"minSupportedVersion\":1,\"maxSupportedVersion\":1}")!.AsObject();
+        bootstrap.Remove("descriptorVersion");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeBootstrap(Encoding.UTF8.GetBytes(bootstrap.ToJsonString())));
+
+        var request = JsonNode.Parse(RequestJson("{}"))!.AsObject();
+        request.Remove("protocolVersion");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeRequest(Encoding.UTF8.GetBytes(request.ToJsonString())));
+
+        var response = JsonNode.Parse(
+            "{\"messageKind\":\"response\",\"protocolVersion\":1,\"sessionId\":\"s\",\"requestId\":\"1\",\"resultStatus\":\"success\",\"payload\":{}}")!.AsObject();
+        response.Remove("protocolVersion");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.DeserializeResponse(Encoding.UTF8.GetBytes(response.ToJsonString())));
+
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.ReadBeginCurrentHwndPayload(JsonDocument.Parse("{}").RootElement));
+
+        var revalidate = JsonNode.Parse(
+            "{\"hwnd\":1,\"candidateHandle\":{\"sessionId\":\"s\",\"handleId\":\"h\",\"generation\":1,\"kind\":\"AgentEntity\"}}")!.AsObject();
+        revalidate["candidateHandle"]!.AsObject().Remove("generation");
+        Assert.Throws<ProtocolJsonException>(() =>
+            ProtocolJsonCodec.ReadRevalidateCurrentHwndPayload(
+                JsonDocument.Parse(revalidate.ToJsonString()).RootElement));
+    }
+
+    [Fact]
     public void Hello_and_response_round_trip_with_string_enum_errors()
     {
         var hello = new HelloRequestWire
@@ -196,6 +355,40 @@ public sealed class ProtocolJsonCodecTests
 
         Assert.Equal(ProtocolJsonCodec.ProtocolErrorStatus, parsedResponse.ResultStatus);
         Assert.Equal(nameof(ProtocolErrorCode.ProtocolMismatch), parsedResponse.ProtocolError?.Code);
+    }
+
+    private static FrameworkCorrelationEvidenceDto CreateFrameworkEvidence(
+        int processId = 42,
+        CorrelationTargetRefDto? candidateTarget = null,
+        IEnumerable<AdapterMetadataDto>? adapterMetadata = null,
+        IEnumerable<CallbackDetailDto>? callbackDetails = null)
+    {
+        return new FrameworkCorrelationEvidenceDto(
+            "winforms",
+            processId,
+            candidateTarget,
+            new[]
+            {
+                new CorrelationEvidenceFactDto(
+                    "ControlFromHandle",
+                    ProofOutcome.Passed,
+                    EvidenceKind.Deterministic)
+            },
+            new[]
+            {
+                new CorrelationValidationFactDto(
+                    "CurrentHwndMatches",
+                    ValidationOutcome.Passed)
+            },
+            new CorrelationEffectSummaryDto(
+                new[] { EffectCategory.Passive },
+                FrameworkStateEffect.None,
+                ApplicationCallbackEffect.None,
+                callbackDetails ?? Array.Empty<CallbackDetailDto>(),
+                VisibleMutationEffect.NotRequested,
+                new[] { ProtocolOperationNames.BeginCurrentHwnd }),
+            adapterMetadata ?? Array.Empty<AdapterMetadataDto>(),
+            Array.Empty<CorrelationLimitationDto>());
     }
 
     private static string RequestJson(string payload)

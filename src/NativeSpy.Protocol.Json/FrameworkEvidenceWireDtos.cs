@@ -76,7 +76,9 @@ internal sealed class TypeIdentityWire
     public TypeRefWire? PointerElementType { get; set; }
     public TypeRefWire? ByRefElementType { get; set; }
     public TypeRefWire? NullableUnderlyingType { get; set; }
-    public bool IsValueType { get; set; }
+    // Required type identity data: nullable preserves wire presence so an omitted
+    // false value cannot be confused with an explicit false.
+    public bool? IsValueType { get; set; }
     public TypeRefWire? BaseType { get; set; }
     public TypeRefWire[]? Interfaces { get; set; }
     public string? DynamicIdentity { get; set; }
@@ -131,6 +133,8 @@ internal sealed class CallbackWire
 {
     public string Name { get; set; } = string.Empty;
     public int? Count { get; set; }
+    // Optional-by-design: absence preserves CallbackDetailDto's unknown-count
+    // default (false); a supplied Count still has independent DTO validation.
     public bool CountKnown { get; set; }
 }
 
