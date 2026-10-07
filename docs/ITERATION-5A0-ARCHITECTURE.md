@@ -1,6 +1,6 @@
 # NativeSpy I5-A0 — Attach Contract, Lifecycle, Scope, and Failure Model
 
-**Starting architecture-document revision:** `eb34374261a3a00ae8e2245c18ce867af852b11b`
+**Starting architecture-document revision:** `a56b83ec806e1b6dfbcb058287b05c5d9531c49c`
 **Production-source baseline:** `c02fbbceb7a389d806860bfe7d6e01d7f20cf7e9`
 **Status:** ready for independent closure review.
 **Scope:** architecture documentation only. I5-A1 has not been implemented.
@@ -36,18 +36,20 @@ I5 makes attach possible to an already-running application that did not start Na
 The first eventual real attach slice is exactly:
 
 ```text
-OS                 Windows on AMD64
+OS                 Windows desktop, version 10.0.16299 (Windows 10 1709) or later,
+                   on native AMD64
 NativeSpy          x64
-target process     x64
-attach mode        already-running target only
-runtime            .NET 10 CoreCLR runtime major band
-composition        WinForms
-security           same primary user SID and same integrity level
+Target process     x64
+Attach mode        already-running target only
+Runtime            .NET 10 CoreCLR runtime major band
+Composition        WinForms
+Security           matching primary user SID; target integrity not higher than
+                   the controller integrity
 ```
 
-The runtime band includes supported .NET 10 servicing versions; it is not one exact patch, an application TFM string, filename convention, command line, environment, or build-configuration inference. Runtime identity, payload compatibility, and process-entry compatibility are distinct facts (§20).
+The floor is a Windows desktop/client floor, not a Windows Server floor. Windows Server, ARM64 Windows (including x64-emulated targets), and any pre-1709 Windows version are outside the first real slice even when an individual API happens to be present. The runtime band includes supported .NET 10 servicing versions; it is not one exact patch, an application TFM string, filename convention, command line, environment, or build-configuration inference. Runtime identity, payload compatibility, and process-entry compatibility are distinct facts (§20).
 
-Initial exclusions: ARM64 Windows (including x64-emulated targets), x86, ARM64 targets, .NET Framework, WPF target support, native/AOT targets, launch-time attach, startup hooks, UIA2, multi-client sessions, transparent reconnect, leases, automatic elevation, privileged broker/service, writes, invocation, collection browsing, and generated bindings. Process-picker UX and enumeration belong above `NativeSpy.Attach`; it accepts an already-selected exact process identity.
+Initial exclusions: Windows Server, ARM64 Windows, x86, ARM64 targets, .NET Framework, WPF target support, native/AOT targets, launch-time attach, startup hooks, UIA2, multi-client sessions, transparent reconnect, leases, automatic elevation, privileged broker/service, writes, invocation, collection browsing, and generated bindings. Process-picker UX and enumeration belong above `NativeSpy.Attach`; it accepts an already-selected exact process identity.
 
 I5-A1 implements semantic contracts, manager lifecycle, fakes, deterministic tests, read-only Windows probing, and the first-entry gate. A1 does not attach an arbitrary real target. B/C/E provide real bootstrap, native entry, and arbitrary WinForms behavior.
 
@@ -93,6 +95,7 @@ Attach code MUST use an explicit value comparer, never reference equality. A1 ac
 - `AgentHost.StopAsync` is state-idempotent but not task-idempotent: concurrent callers can run shutdown work. Current shutdown can swallow disposal failures while reaching `Closed`; state alone is not proof of closure. B1 MUST make stop callers share one logical task and provide truthful closure evidence.
 - After some failed pre-handshake connections, AgentHost can return to listening. This is not permission to admit a second generation; attach-owned failure cleanup requests the shared stop.
 - `WinFormsHostCompositionFactory(Control)` and `WinFormsUiDispatcher(Control)` require a fixed caller-provided Control. Current code does not discover arbitrary app contexts, multiple UI threads, or HWND-to-context routing.
+- `NativeSpy.Agent.Host.WinForms` is the current target-side Host/bootstrap composition project. Its `WinFormsHostBootstrap` creates `AgentHostOptions` and a Host composition from the caller-provided Control; it is distinct from `NativeSpy.Agent.WinForms`, which contains target-side WinForms evidence/adapters and is a dependency of the Host composition project.
 - The WinForms composition advertises adapter ID `winforms`; the existing client correlation surface is `IWinFormsCorrelationPort`.
 - `FlaUiAutomationSession.Attach(ProcessIdentityDto)` reduces identity to PID. `ObjectSpyCoordinator` checks UI session PID against the requested PID, not exact incarnation. Later integrated ObjectSpy work MUST add an exact-incarnation seam.
 - Current frozen FlaUI selection does not deterministically release its live UIA source before its session ends. Revisit when I5/ObjectSpy longer-lived session use requires it.
@@ -146,8 +149,14 @@ NativeSpy.Client.NamedPipes
     NamedPipeClientSession/I3 connector adapter
     B1 rendezvous transport adapter using the Transport peer-PID primitive
 
-NativeSpy.Agent / NativeSpy.Agent.WinForms
-    target-side CLR and framework evidence
+NativeSpy.Agent
+    target-side CLR evidence
+
+NativeSpy.Agent.WinForms
+    target-side WinForms evidence/adapters; not Host bootstrap
+
+NativeSpy.Agent.Host.WinForms
+    target-side WinForms Host/bootstrap composition; distinct from Agent.WinForms
 
 NativeSpy.ObjectSpy
     orchestration/pairing of FlaUI and AttachSession
@@ -167,6 +176,9 @@ NativeSpy.Attach
 NativeSpy.Attach.Windows
 
 NativeSpy.Transport.NamedPipes → NativeSpy.Protocol
+NativeSpy.Agent.WinForms → NativeSpy.Agent + NativeSpy.Protocol
+NativeSpy.Agent.Host → NativeSpy.Agent + NativeSpy.Protocol.Json + NativeSpy.Transport.NamedPipes
+NativeSpy.Agent.Host.WinForms → NativeSpy.Agent.Host + NativeSpy.Agent.WinForms + NativeSpy.Protocol.Json + NativeSpy.Protocol
 NativeSpy.Client.NamedPipes → NativeSpy.Client + Protocol.Json + Transport.NamedPipes
 NativeSpy.Attach.Windows → NativeSpy.Attach + Transport.NamedPipes
 NativeSpy.ObjectSpy → NativeSpy.Attach + NativeSpy.Client + NativeSpy.FlaUI
@@ -175,7 +187,7 @@ NativeSpy.ObjectSpy.App → ObjectSpy + Attach.Windows + Client.NamedPipes
 
 `NativeSpy.Attach` may reference `NativeSpy.Client` for the CLR port, generic adapter contract, and internal connector seam. The connector seam belongs in Client to avoid a Client→Attach cycle; it is internal to composition and exposed only to necessary friend assemblies. Bootstrap data on that seam is not an ObjectSpy-facing contract.
 
-`NativeSpy.Attach.Windows` does not own WinForms semantics. `NativeSpy.Client` owns the detached client-side WinForms adapter; `NativeSpy.Agent.WinForms` owns target-side WinForms evidence; ObjectSpy orchestrates both. Protocol, Agent, Client, and Transport MUST NOT reference native injector implementation.
+`NativeSpy.Attach.Windows` does not own WinForms semantics. `NativeSpy.Client` owns the detached client-side WinForms adapter; `NativeSpy.Agent.WinForms` owns target-side WinForms evidence; `NativeSpy.Agent.Host.WinForms` composes that evidence into the current target-side Host/bootstrap and is not interchangeable with `NativeSpy.Agent.WinForms`; ObjectSpy orchestrates the client-side pairing. Protocol, Agent, Client, and Transport MUST NOT reference native injector implementation.
 
 ---
 
@@ -248,6 +260,7 @@ Null means neutral probe. Omission never means “all compositions supported” 
 A completed probe keeps separate:
 
 ```text
+WindowsPlatformIdentity / WindowsPlatformSupport
 TargetArchitecture / ArchitectureSupport
 TargetRuntimeIdentity / RuntimeSupport
 RequestedCompositionId / CompositionSupport
@@ -265,9 +278,9 @@ CompositionSupport = NotRequested
 OverallAttachEligibility = Unknown
 ```
 
-A composition-specific result can be `Eligible` only when architecture, runtime, exact requested composition, and security are all `KnownSupported`. Any unsupported required dimension gives `NotEligible`; any unresolved required dimension gives `Unknown`. Runtime support never implies composition support or vice versa.
+A composition-specific result can be `Eligible` only when Windows platform, architecture, runtime, exact requested composition, and security are all `KnownSupported`. Any unsupported required dimension gives `NotEligible`; any unresolved required dimension gives `Unknown`. Runtime support never implies composition support or vice versa.
 
-`TargetProbeResult` contains the requested identity, optional observed identity, `ProbeOutcome`, architecture/support, optional runtime identity/support, requested composition/support, security support, overall eligibility, advisory NativeSpy state, bounded fixed-enum limitations, and bounded diagnostic. A non-completed outcome has no eligible support result. No active AttachId or secret is included.
+`TargetProbeResult` contains the requested identity, optional observed identity, `ProbeOutcome`, bounded Windows platform identity/support, architecture/support, optional runtime identity/support, requested composition/support, security support, overall eligibility, advisory NativeSpy state, bounded fixed-enum limitations, and bounded diagnostic. A non-completed outcome has no eligible support result. No active AttachId or secret is included.
 
 ### 5.3 Probe outcomes and cancellation
 
@@ -285,63 +298,27 @@ InternalFailure
 
 Caller cancellation throws `OperationCanceledException`, not a result value. Standalone deadline expiry returns `TimedOut`. A non-completed result cannot be eligible. If this manager/probe has positive evidence the requested incarnation exited, report `TargetExited`; if the process was never observed, absence may be `TargetNotFound`. A reused PID with a different start identity is never accepted and is `TargetIdentityChanged` or `TargetExited` according to evidence.
 
-### 5.4 Fresh attach-owned probe and fail-fast ordering
+### 5.4 Fresh attach-owned probe and lifecycle decision matrix
 
-Every valid `AttachAsync` allocates a fresh `AttachId` before the authoritative manager-local lifecycle check. Every attempt that proceeds to target eligibility evaluation or target-entry consideration MUST obtain a fresh composition-specific probe for that attempt. A caller-provided or stale standalone probe never authorizes entry.
+Every syntactically valid `AttachAsync` allocates a fresh `AttachId` before lifecycle inspection and MUST perform at least one fresh composition-specific probe before returning an expected `AttachResult`. This includes local `AlreadyAttached`, `AttachInProgress`, `TargetExited`, and `CleanupUnknown` outcomes. Invalid programmer input throws before ID allocation and therefore has no attach attempt. A caller-provided or stale standalone probe never authorizes entry.
 
-Authoritative local fast paths are:
+The manager first validates the request and allocates the ID, then atomically observes its local record. A `Detached` record is claimed by this attempt as `Probing` before its probe runs. A record already owned by another operation is not queued or changed; this call still performs its required fresh probe and then returns the authoritative conflict. A `CleanupUnknown` record is not claimed as a new generation; this call performs its fresh probe and then exactly one bounded `ReconcileAsync`. A fresh probe is evidence only, not a lifecycle reservation or a stop authorization. After the probe, the manager rereads its lifecycle and exact target identity before applying the matrix. If an advisory result is stale, the current state wins.
 
-```text
-Attached                         → AlreadyAttached; no probe
-Probing/Bootstrapping/Connecting → AttachInProgress; no probe
-Detaching/Settling               → AttachInProgress; no probe
-TargetExited                     → TargetExited; no strategy
-CleanupUnknown                   → exactly one bounded ReconcileAsync first
-Detached                         → fresh composition-specific probe
-```
+The probe-result × lifecycle-state matrix is:
 
-For a locally known `CleanupUnknown`, request validation and fresh `AttachId` allocation happen first, followed by exactly one bounded reconciliation and no Host admission. If it proves closure, lifecycle becomes `Detached` and the same attempt performs a fresh composition-specific probe. If the target exited, return `TargetExited`. If unresolved or timed out, return `CleanupUnknown`; do not call `BeginAttachAsync`.
+| Fresh probe result | Detached | Probing (this attempt) | Probing (other) | Bootstrapping | Connecting | Attached | Detaching | Settling | CleanupUnknown | TargetExited |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Exact target-exit evidence (`TargetExited`, or identity change proving the requested incarnation is gone) | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | `TargetExited`; terminalize; no strategy | Run the one reconciliation, whose authoritative result remains `TargetExited` | `TargetExited`; no strategy |
+| Other non-completed probe (`TargetNotFound`, `AccessDenied`, `TimedOut`, `InternalFailure`) | Typed `Probe` failure; remain `Detached`; no strategy | Same typed `Probe` failure; return to `Detached` if this attempt owns the claim | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | `AlreadyAttached`; existing generation unchanged | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | Run exactly one reconciliation; do not admit a Host | `TargetExited`; no strategy |
+| Completed but `Unknown`/`NotEligible` | Corresponding typed support failure; remain `Detached`; no strategy | Same support failure; return to `Detached` if this attempt owns the claim | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | `AlreadyAttached`; existing generation unchanged | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | Run exactly one reconciliation; do not admit a Host | `TargetExited`; no strategy |
+| Completed `Eligible`, no orphan advisory | Claim `Bootstrapping`; invoke `BeginAttachAsync` at most once | Claim `Bootstrapping`; invoke `BeginAttachAsync` at most once | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | `AlreadyAttached`; existing generation unchanged | `AttachInProgress`; existing operation unchanged | `AttachInProgress`; existing operation unchanged | Run exactly one reconciliation; do not admit a Host until it proves closure | `TargetExited`; no strategy |
+| Completed `Eligible` plus an authorized orphan advisory | Run exactly one bounded reconciliation, then a NEW fresh probe if closure is proven | Same | `AttachInProgress`; stale advisory cannot stop the other operation | `AttachInProgress`; stale advisory cannot stop the other operation | `AttachInProgress`; stale advisory cannot stop the other operation | `AlreadyAttached`; a live authenticated generation is not orphan-reconcilable | `AttachInProgress`; no stop | `AttachInProgress`; no stop | Run exactly one bounded reconciliation | `TargetExited`; no strategy |
 
-On a `Detached` path, perform the fresh composition-specific probe. A non-completed probe returns its typed probe failure without strategy invocation. `SecuritySupport = KnownUnsupported` returns `UnsupportedSecurityContext / Probe`; security evidence denied by Windows returns `AccessDenied / Probe`; inconclusive security evidence returns `ProbeInconclusive / Probe`. All three have `PostFailureLifecycle = Detached` and invoke no strategy. Only after `SecuritySupport = KnownSupported` may the attempt invoke reconciliation or entry strategy. A completed probe that observes an orphan-reconcilable coordinator condition (`Orphaned`, or `Settling`/`CleanupUnknown` for a generation whose authenticated owner is independently known absent) MUST trigger exactly one bounded `ReconcileAsync`; this is mandatory, not optional. The coordinator independently validates current generation and owner authorization. The outcome map below is specifically for this mandatory post-probe advisory-orphan reconciliation; the earlier manager-local `CleanupUnknown` fast path retains its separate pre-probe mapping. If the generation changed since the advisory probe, classify the result using the coordinator's current authoritative state, never the stale observation. Its outcomes are:
+`Probing (this attempt)` is the only matrix state that may continue from a fresh eligible result; `Probing (other)` is a conflict. A probe that positively proves the requested incarnation exited takes precedence over an otherwise busy local state. `TargetNotFound` is not positive exit evidence and therefore does not erase an attached generation. The `CleanupUnknown` column always performs its one reconciliation after the initial fresh probe; if reconciliation proves `Detached`, the same `AttachId` performs a NEW fresh composition-specific probe before any eligibility decision. If reconciliation proves `TargetExited`, return `TargetExited`; if it is unresolved or times out, return `CleanupUnknown`/`StageTimedOut` at `Reconciliation`; no `BeginAttachAsync` or second Host is allowed.
 
-```text
-Detached proven
-    → target lifecycle becomes Detached; perform a NEW fresh
-      composition-specific probe; continue this same AttachAsync only if
-      the new probe is Eligible; no AttachFailure yet
-TargetExited proven
-    → TargetExited / Reconciliation, PostFailureLifecycle = TargetExited;
-      old exact ProcessIdentity is terminal; no BeginAttachAsync
-current state is live Attached
-    → AlreadyAttached / Reconciliation, PostFailureLifecycle omitted;
-      existing generation unchanged; no BeginAttachAsync
-current state is a non-reconcilable transition (including
-Bootstrapping/Connecting/Detaching/Settling)
-    → AttachInProgress / Reconciliation, PostFailureLifecycle omitted;
-      existing generation unchanged; no BeginAttachAsync
-reconciliation completes without proving Detached or TargetExited
-    → CleanupUnknown / Reconciliation,
-      PostFailureLifecycle = CleanupUnknown; no BeginAttachAsync, target remains
-      blocked, no second Host
-manager-owned Reconciliation budget expires before a definitive result
-    → StageTimedOut / Reconciliation,
-      PostFailureLifecycle = CleanupUnknown; target lifecycle becomes
-      CleanupUnknown; preserve timeout as cause; no BeginAttachAsync, no second
-      Host, no background polling
-```
+For a `Detached`/owned-`Probing` eligible result, a completed probe that observes `Orphaned`, or `Settling`/`CleanupUnknown` for a generation whose authenticated owner is independently known absent, MUST trigger exactly one bounded `ReconcileAsync`; this is mandatory, not optional. The coordinator independently validates current generation and owner authorization. If reconciliation proves `Detached`, lifecycle becomes `Detached` and the same attempt performs a NEW fresh composition-specific probe; it continues only if that second probe is `Eligible`. If it finds a live `Attached` generation, return `AlreadyAttached` with no `PostFailureLifecycle`; if it finds a non-reconcilable transition, return `AttachInProgress` with no `PostFailureLifecycle`; if it cannot prove closure, return `CleanupUnknown`; if its manager-owned budget expires, return `StageTimedOut` with `PostFailureLifecycle = CleanupUnknown`. These are the mandatory post-probe advisory-orphan outcomes; local `CleanupUnknown` uses the separate column above. A stale advisory observation never authorizes a stop.
 
-A coordinator's authoritative lifecycle rejection is a normal lifecycle conflict, not a rendezvous authentication failure. Transport, authentication, and peer-verification failures retain their existing rendezvous failure codes and `AttachStage = Rendezvous`; they are never translated to `AlreadyAttached` or `AttachInProgress`. A stale advisory observation never authorizes a stop. A live authenticated session is not orphan-reconcilable; the coordinator returns its authoritative conflict without stopping it.
-
-For any attempt that completes its required probe/reconciliation sequence:
-
-```text
-probe not completed                 → typed probe failure; no BeginAttachAsync
-eligibility != Eligible             → corresponding typed support failure; no BeginAttachAsync
-eligibility == Eligible             → BeginAttachAsync at most once
-```
-
-A valid unsupported composition is probed and produces `KnownUnsupported`. `BeginAttachAsync` independently checks the coordinator gate before Host admission and returns the current typed lifecycle conflict rather than starting a second Host. These pre-Host coordinator conflicts use `AttachStage = LifecycleAdmission` and omit `PostFailureLifecycle`; reconciliation conflicts use `AttachStage = Reconciliation` and likewise omit it. There is no retry loop. Per valid attempt, `ReconcileAsync` and `BeginAttachAsync` each run at most once; normal Detached attach uses zero reconciliations, while CleanupUnknown/orphan recovery uses one. Reconciliation is lifecycle work, not target entry. Unknown/Unsupported eligibility never permits `BeginAttachAsync`.
-
+A coordinator's authoritative lifecycle rejection is a normal lifecycle conflict, not a rendezvous authentication failure. Transport, authentication, and peer-verification failures retain their existing rendezvous failure codes and `AttachStage = Rendezvous`; they are never translated to `AlreadyAttached` or `AttachInProgress`. There is no retry loop. Per valid `AttachAsync`, `ReconcileAsync` runs 0/1 times in total and `BeginAttachAsync` runs 0/1 times in total. A local `CleanupUnknown` reconciliation consumes that attempt's recovery budget; if the post-reconciliation fresh probe sees a new orphan/busy race, the manager uses the coordinator's current authoritative conflict/unknown result and never starts a second reconciliation. Reconciliation is lifecycle work, not target entry. Unknown/Unsupported eligibility never permits `BeginAttachAsync`.
 ### 5.5 Advisory NativeSpy state
 
 Optional lifecycle observation is:
@@ -357,17 +334,20 @@ Settling | Orphaned | CleanupUnknown | Unknown
 
 ## 6. Windows architecture, runtime, and security evidence
 
-### 6.1 Architecture
+### 6.1 Windows platform and architecture
 
-A1 uses documented `IsWow64Process2` process/native machine evidence for both the controller and target. When `pProcessMachine` is `IMAGE_FILE_MACHINE_UNKNOWN`, the process is native and its machine is `pNativeMachine`; otherwise use `pProcessMachine` as the process machine. Initial support requires all of:
+The first real slice requires Windows desktop/client version 10.0.16299 (Windows 10 1709) or later on a native AMD64 machine. Windows Server, ARM64 Windows (including x64 emulation), and older Windows versions are `KnownUnsupported`; an inability to establish the required platform/SKU/version evidence is `Unknown` unless the platform is positively inaccessible, which is `AccessDenied`. The bounded `WindowsPlatformIdentity` contains only the observed desktop/server classification and numeric OS version evidence needed for this floor. It does not claim an application TFM or deployment model.
+
+A1 uses documented `IsWow64Process2` process/native machine evidence for both the controller and target. This API is the required architecture evidence source for the initial floor; A1 does not fall back to `IsWow64Process`, `Environment.Is64BitProcess`, executable headers, process names, or executable names. When `pProcessMachine` is `IMAGE_FILE_MACHINE_UNKNOWN`, the process is native and its machine is `pNativeMachine`; otherwise use `pProcessMachine` as the process machine. Initial support requires all of:
 
 ```text
+Windows native machine    = AMD64
 NativeSpy process machine = AMD64
 Target process machine    = AMD64
-Windows native machine    = AMD64
+Windows platform          = supported desktop/client floor
 ```
 
-An x64 process on ARM64 Windows is `KnownUnsupported`, including x64 emulation; an x64 process-machine value alone is insufficient. Positively identified x86, ARM64, or other architectures are `KnownUnsupported`; incomplete/unrecognized evidence is `Unknown`. Do not infer from executable name. The API requires query process rights; failures are classified from actual evidence. Read-only probing requests no process-entry/write rights. [Microsoft: IsWow64Process2](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-iswow64process2)
+An x64 process on ARM64 Windows is `KnownUnsupported`, including x64 emulation; an x64 process-machine value alone is insufficient. Positively identified x86, ARM64, or other architectures are `KnownUnsupported`; incomplete/unrecognized evidence is `Unknown`. The API requires query process rights; failures are classified from actual evidence. Read-only probing requests no process-entry/write rights. [Microsoft: IsWow64Process2](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-iswow64process2)
 
 ### 6.2 Runtime identity and support
 
@@ -391,17 +371,17 @@ Runtime-support uncertainty is separate from payload-compatibility uncertainty. 
 
 Controller primary user SID and integrity level come from its actual process primary token. Target values come from the target process primary token using Windows process/token APIs. Do not use caller-selected SID, thread impersonation token, environment value, or username string.
 
-Initial support requires exact equality:
+Initial support requires exact primary-user SID equality and a target integrity level no higher than the controller's:
 
 ```text
 controller primary user SID == target primary user SID
 AND
-controller integrity level == target integrity level
+target integrity level <= controller integrity level
 ```
 
-Different user or different integrity is `KnownUnsupported`, including same-user lower-integrity targets. A positively observed policy mismatch maps to `UnsupportedSecurityContext / Probe`, not `AccessDenied`. Missing required token evidence is `AccessDenied` if Windows denied access; otherwise it is `Unknown` and maps to `ProbeInconclusive / Probe`. Neither case invokes strategy from the Detached attach path. Matching SID alone is insufficient. Normal DACL access checks remain authoritative; there is no automatic elevation.
+A different user or a target with higher integrity is `KnownUnsupported`. A same-user target with equal or lower integrity may be `KnownSupported`, subject to all other evidence and normal DACL/MIC checks. A positively observed policy mismatch maps to `UnsupportedSecurityContext / Probe`, not `AccessDenied`. Missing required token evidence is `AccessDenied` if Windows denied access; otherwise it is `Unknown` and maps to `ProbeInconclusive / Probe`. Neither case invokes strategy from the Detached attach path. Matching SID alone is insufficient. There is no automatic elevation.
 
-This equality rule is a conservative NativeSpy product choice, not a Windows requirement. MIC can deny lower-integrity writes despite DACL permission. A0/A1 adds no custom mandatory-integrity pipe-label policy. [Microsoft: Mandatory Integrity Control](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control), [Process Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights), [OpenProcessToken](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocesstoken), [GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation).
+This ordering rule is a conservative NativeSpy product choice, not a Windows requirement. MIC and DACL checks remain authoritative and can still prevent a particular operation; they do not turn a lower-integrity target into a higher-integrity target for this eligibility policy. A0/A1 adds no custom mandatory-integrity pipe-label policy. [Microsoft: Mandatory Integrity Control](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control), [Process Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights), [OpenProcessToken](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocesstoken), [GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation).
 
 Rendezvous ACLs derive from actual controller identity. Target AgentHost `AllowedUserSid` derives from the target's own primary token. Controller input MUST NOT choose the target Agent pipe ACL SID. The current repository does not yet satisfy this target-side ownership; B0 freezes the target bootstrap API and B1 implements it.
 
@@ -495,6 +475,10 @@ otherwise                                                        → Active
 ```
 
 `LocallyDisposed` is local-only and never asserts target closure. `CleanupUnknown` is not a positive terminal target fact and does not override a local-disposal projection; the manager still retains and reports its blocking lifecycle state. Later positive target-exit or detach-closure evidence updates the projection to `TargetExited` or `Detached`. A disposed session never becomes Active. Transition out of Active prevents new CLR/adapter calls; already-started target callbacks are not forcibly aborted and may finish naturally under the I0–I4a rules.
+
+Terminal metadata is a fixed, bounded capsule, not an extensible dictionary. It contains only the AttachId, exact ProcessIdentity, terminal/session projection, one bounded completion/termination reason, the current detach outcome when one exists, and allowlisted diagnostic values. It contains no historical event list, callback list, exception text, target text, handles, registries, or transport secrets.
+
+The manager retains only the current per-target lifecycle record and in-flight operation state. After a generation is terminal, its session object owns its own bounded terminal capsule and opaque manager binding so repeated `DetachAsync` can return that session's cached result without an unbounded historical-session registry. A later generation is a different current record; an old session's capsule cannot address, stop, or be confused with it. Session metadata and coordinator terminal metadata are each bounded to the fixed fields above; neither grows with the number of probes, callbacks, or reattachments.
 
 ### 7.4 Adapter contract and lookup
 
@@ -663,30 +647,32 @@ Standalone ProbeAsync does not reserve or transition it. `Orphaned` is target-co
 
 | Current state | AttachAsync | ProbeAsync | DetachAsync | Dispose/session behavior |
 |---|---|---|---|---|
-| Detached | Allocate ID, fresh composition probe; if an authorized orphan condition is observed, reconcile exactly once then fresh probe | Read-only snapshot | Known historical session returns its cached authoritative result; unknown/fabricated session is contract misuse | Manager disposal closes manager only |
-| Probing | Fresh ID, `AttachInProgress`, no probe | Allowed, advisory | No session exists | Caller cancellation before strategy entry returns to Detached |
-| Bootstrapping | Fresh ID, `AttachInProgress`, no probe | Allowed | No published session | Cancellation prevents publication; tracked settlement |
-| Connecting | Fresh ID, `AttachInProgress`, no probe | Allowed | No published session | I3/capability failure or cancellation triggers tracked cleanup |
-| Attached | Fresh ID, `AlreadyAttached`, no probe | Allowed | Start/join the one shared stop for the known current-generation session; historical sessions return their own cached result | Dispose local only; may cause client-loss cleanup |
-| Detaching | Fresh ID, `AttachInProgress`, no probe | Allowed | Current-generation session joins the same stop task, including after local Dispose if detach was already claimed; historical sessions return their own cached result | Dispose cannot cancel shared stop |
-| Settling | Fresh ID, `AttachInProgress`, no probe while owned task runs | Allowed | Current-generation session joins the same stop task; never create second; historical sessions return their own cached result | No new generation until proof/target exit |
-| CleanupUnknown | Exactly one reconciliation via valid AttachAsync; no new Host before proof | Advisory | Current-generation session returns cached `CleanupUnknown`; historical sessions return their per-AttachId result; no stop retry | Local disposal cannot clear target gate |
-| TargetExited | `TargetExited`, no strategy | `TargetExited` for this known old identity | `TargetExited` for a known, not-preclaim-disposed session | State/terminal metadata inspectable; surfaces closed |
+| Detached | Fresh composition-specific probe; eligible path may reconcile one authorized orphan, then fresh probe once more | Read-only snapshot | Known historical session returns its cached authoritative result; unknown/fabricated session is contract misuse | Manager disposal closes manager only |
+| Probing | Fresh ID and fresh composition-specific probe; this attempt continues only if it owns the `Probing` claim, otherwise `AttachInProgress` | Allowed, advisory | No session exists | Caller cancellation before strategy entry returns to Detached |
+| Bootstrapping | Fresh ID and fresh composition-specific probe, then `AttachInProgress` | Allowed | No published session | Cancellation prevents publication; tracked settlement |
+| Connecting | Fresh ID and fresh composition-specific probe, then `AttachInProgress` | Allowed | No published session | I3/capability failure or cancellation triggers tracked cleanup |
+| Attached | Fresh ID and fresh composition-specific probe, then `AlreadyAttached` | Allowed | Start/join the one shared stop for the known current-generation session; historical sessions return their own cached result | Dispose local only; may cause client-loss cleanup |
+| Detaching | Fresh ID and fresh composition-specific probe, then `AttachInProgress` | Allowed | Current-generation session joins the same stop task, including after local Dispose if detach was already claimed; historical sessions return their own cached result | Dispose cannot cancel shared stop |
+| Settling | Fresh ID and fresh composition-specific probe, then `AttachInProgress` while owned task runs | Allowed | Current-generation session joins the same stop task; never create second; historical sessions return their own cached result | No new generation until proof/target exit |
+| CleanupUnknown | Fresh composition-specific probe, then exactly one reconciliation via valid AttachAsync; closure requires a NEW fresh probe; no new Host before proof | Advisory | Current-generation session returns cached `CleanupUnknown`; historical sessions return their per-AttachId result; no stop retry | Local disposal cannot clear target gate |
+| TargetExited | Fresh composition-specific probe, then `TargetExited`; no strategy | `TargetExited` for this known old identity | `TargetExited` for a known, not-preclaim-disposed session | State/terminal metadata inspectable; surfaces closed |
 
-A manager retains the AttachId/session association needed for repeat DetachAsync. A manager lifecycle record of `Detached` is not a contract error when the supplied session is the known historical session for that AttachId; return its current cached authoritative result without touching the current generation. Foreign-manager, unknown, fabricated, or locally disposed-before-detach-claim sessions are programmer/state misuse and throw. For a PID reused by a new process, the new ProcessIdentity is a different map key and an independent target. Old identity never retargets.
+A terminal session retains the bounded AttachId/identity/result capsule needed for repeat `DetachAsync`; the manager does not maintain an unbounded historical session map. A manager lifecycle record of `Detached` is not a contract error when the supplied session is a session created by that manager and its capsule is still available; return its current cached authoritative result without touching the current generation. Foreign-manager, unknown, fabricated, or locally disposed-before-detach-claim sessions are programmer/state misuse and throw. For a PID reused by a new process, the new ProcessIdentity is a different map key and an independent target. Old identity never retargets.
 
 ### 9.3 Same-manager and different-target concurrency
 
-Same-target calls do not queue. Exact equality is the §4 comparer.
+Same-target calls do not queue. Exact equality is the §4 comparer. Every valid call still performs its fresh composition-specific probe; the probe does not turn a conflict into a queued operation.
 
 ```text
-Attached                         → AlreadyAttached
-Probing/Bootstrapping/Connecting → AttachInProgress
-Detaching/Settling               → AttachInProgress
-CleanupUnknown                   → one bounded reconciliation; no Host until closure proof
+Attached                         → probe, then AlreadyAttached
+Probing/Bootstrapping/Connecting → probe, then AttachInProgress
+Detaching/Settling               → probe, then AttachInProgress
+CleanupUnknown                   → probe, one bounded reconciliation, and a
+                                   NEW probe only if closure is proven
+TargetExited                     → probe, then TargetExited
 ```
 
-Different exact ProcessIdentity values progress independently. Probe is allowed in every state. Local fail-fast results carry their own fresh AttachId and `AttachStage = LifecycleAdmission`. A foreign manager's fresh probe shows advisory lifecycle state only. When that attempt observes an orphan-reconcilable `Orphaned`, `Settling`, or `CleanupUnknown` generation under §14.2, one authenticated reconciliation is mandatory; the coordinator independently validates authorization and current generation. Otherwise strategy checks the target coordinator before admitting a Host/session and returns its authoritative busy/already-attached result.
+Different exact ProcessIdentity values progress independently. Probe is allowed in every state. Local conflict results carry their own fresh AttachId and `AttachStage = LifecycleAdmission`. A foreign manager's fresh probe shows advisory lifecycle state only. When that attempt observes an orphan-reconcilable `Orphaned`, `Settling`, or `CleanupUnknown` generation under §14.2, one authenticated reconciliation is mandatory; the coordinator independently validates authorization and current generation. Otherwise strategy checks the target coordinator before admitting a Host/session and returns its authoritative busy/already-attached result.
 
 ### 9.4 Attach publication linearization
 
@@ -709,13 +695,16 @@ Once manager invokes `BeginAttachAsync`, it treats the operation as potentially 
 For an old exact identity whose target is positively known to have exited:
 
 ```text
-AttachAsync(old identity)       → TargetExited; no strategy
+AttachAsync(old identity)       → fresh composition-specific probe, then
+                                   TargetExited; no strategy
 ProbeAsync(old identity)        → TargetExited with prior-incarnation evidence
 DetachAsync(old known session)  → authoritative TargetExited, unless the
                                    session was locally disposed before any
                                    detach claim (programmer/state misuse)
 old AttachSession.State         → TargetExited
 ```
+
+A known `TargetExited` manager record still performs the required attach probe; the terminal record prevents that probe from authorizing retargeting to a reused PID.
 
 If this manager/probe never observed the process and the PID is absent, Probe may return `TargetNotFound`. If the same PID now has another start identity, reject as `TargetIdentityChanged`/`TargetExited` from available evidence; never use the new process for the old request. A new ProcessIdentity with that PID is independently attachable.
 
@@ -725,7 +714,7 @@ If this manager/probe never observed the process and the PID is absent, Probe ma
 
 ### 10.1 First-entry gate
 
-Before a resident target coordinator owns generation admission, independent managers use a fail-fast cross-process named mutex in the `Global\` namespace. It therefore arbitrates across Windows sessions. `NativeSpy.Attach.Windows` owns it. A1 implements the gate abstraction and Windows adapter; A1 does not perform process entry.
+Before a resident target coordinator owns generation admission, independent same-user managers use a fail-fast cross-process named mutex or equivalent in the `Local\` namespace. It arbitrates competing managers in the same Windows session; it is deliberately not a cross-session authorization mechanism. `NativeSpy.Attach.Windows` owns it. A1 implements the gate abstraction and Windows adapter; A1 does not perform process entry.
 
 Gate-name input bytes are canonical and identical across managers:
 
@@ -739,7 +728,7 @@ ProcessStartIdentity: exact UTF-8 bytes, preceded by UInt32 little-endian byte l
 Name:
 
 ```text
-Global\NativeSpy.AttachGate.v1.<64 lowercase hexadecimal SHA-256 characters>
+Local\NativeSpy.AttachGate.v1.<64 lowercase hexadecimal SHA-256 characters>
 ```
 
 No culture-sensitive conversion, case folding, Unicode normalization, or raw start identity in the object name. The mutex uses an explicit restrictive DACL allowing only the same-user controller/target identity required by the initial policy; do not use default permissive kernel-object security. Acquisition is immediate and fail-fast, never a queue: failure to acquire yields `AttachInProgress`. The mutex only arbitrates controllers; it does not authenticate the target. Exact ProcessIdentity and target-coordinator checks remain mandatory. The private acquire/release adapter preserves mutex ownership rules across async work; when using a thread-owned mutex, release occurs on its owning thread.
@@ -769,7 +758,7 @@ bounded terminal metadata
 
 Forbidden: object/member/type registries, shared handle namespace, reconnect state, multi-client Host, ObjectSpy/FlaUI state, leases, persistent object registry, or reuse of old session material. After positive Host closure, clear coordinator roots to old AgentHost, ClrAgentSession, composition, registries, adapters, and secrets. Stack-local references from already-running callbacks may remain naturally until those callbacks finish.
 
-The AttachManager owns public lifecycle policy/results. The resident coordinator is the target-side atomic generation gate and sole executor of its one shared Host stop task. It is not a second public manager or a broker.
+The AttachManager owns public lifecycle policy/results. The resident coordinator is the target-side atomic generation gate and sole executor of its one shared Host stop task. It retains only the current generation plus fixed terminal metadata needed to reject stale work; it has no historical session registry. It is not a second public manager or a broker.
 
 ---
 
@@ -816,21 +805,29 @@ If a stage deadline expires after side effects may have begun, cancel that stage
 
 ## 12. Bootstrap, rendezvous, and secret custody
 
-### 12.1 Initial bootstrap flow
+### 12.1 Initial bootstrap flow and activation boundary
 
-Target-side flow is:
+The semantic attach sequence is:
 
 ```text
-validate exact target incarnation
-acquire resident coordinator lifecycle gate
-create AgentHostOptions on target side
+controller validates exact target incarnation and allocates AttachId
+controller creates one-use rendezvous endpoint + rendezvous token
+controller waits only within the Rendezvous budget
+strategy performs the iteration-owned target activation/wake-up
+    (cooperative activation in B1; production process entry in C1)
+target-side NativeSpy bootstrap validates its exact target incarnation
+and rendezvous peer, acquires the resident coordinator lifecycle gate,
+creates AgentHostOptions on the target side
     (current CreateDefault factory creates pipe name + bootstrap nonce)
-AgentHost starts and owns its existing descriptor/I3 behavior
-return internal descriptor + AttachId correlation over rendezvous
-close one-use rendezvous
+target-side Host starts and owns its existing descriptor/I3 behavior
+resident coordinator returns the internal descriptor + generation data
+through the authenticated rendezvous
+controller retires the one-use endpoint and clears its token
 ```
 
-The controller does not choose Agent pipe name, bootstrap nonce, or target AllowedUserSid. This corrects current ownership without pretending the baseline already does it. The rendezvous is short-lived lifecycle/bootstrap delivery, not a permanent RPC system. AgentHost continues to own the I3 pipe endpoint and nonce lifecycle after target-side creation of its options.
+The controller does not choose the Agent pipe name, bootstrap nonce, or target `AllowedUserSid`. This corrects current ownership without pretending the baseline already does it. The rendezvous is short-lived lifecycle/bootstrap delivery, not a permanent RPC system. AgentHost continues to own the I3 pipe endpoint and nonce lifecycle after target-side creation of its options.
+
+B1's cooperative activation/wake-up is a semantic testable path for a target or harness that already cooperates with NativeSpy. It may signal or wake that cooperative bootstrap, but it MUST NOT be described as native injection or as production arbitrary-process attach. B1 owns the cooperative rendezvous wire and target-side activation behavior. C0/C1 own the production NativeSpy process-entry mechanism: C1 enters the already-running x64/.NET 10 CoreCLR target through the validated process-object binding, then performs the same coordinator/rendezvous semantic operation. A1 has neither activation nor process-entry implementation; its strategy fakes model the handoff only.
 
 ### 12.2 Rendezvous rules
 
@@ -845,35 +842,52 @@ GetNamedPipeClientProcessId on the controller-side server observes the target PI
 This is separate from the later AgentHost/I3 pipe, where AgentHost is the server and the controller is the client. Each rendezvous has:
 
 ```text
-one use
-fresh cryptographic token
+one endpoint and one accepted operation
+fresh cryptographic rendezvous token
 fresh AttachId correlation (attempt/generation fields distinct)
-exact expected ProcessIdentity
+exact expected target ProcessIdentity
+bounded controller ProcessIdentity consistency field
 actual-controller-identity ACL
-same-user + equal-integrity initial policy
+same-user + target-integrity-not-higher initial policy
 finite Rendezvous timeout
-replay rejection
+replay rejection and immediate retirement after security-significant mismatch
 bounded message schema
 ```
 
-The endpoint allows at most four malformed/wrong-secret unauthenticated attempts before retirement, and at most one accepted authenticated operation. Wrong secrets consume only the bounded attempt budget. A correct secret with wrong operation, generation, or identity is security-significant: fail closed and retire immediately.
+The endpoint allows at most four malformed/wrong-secret unauthenticated attempts before retirement, and at most one accepted authenticated operation. Wrong secrets consume only the bounded attempt budget. A transport connection is not an accepted operation. A correct secret with wrong operation, generation, controller/target identity, or lifecycle state is security-significant: fail closed, clear the token, and retire the endpoint immediately.
 
-Authenticated messages carry/echo bounded operation kind, `AttemptAttachId` (the current explicit AttachAsync attempt when one exists), `TargetGenerationAttachId` (the generation acted upon; equal to AttemptAttachId on successful start and the old generation on detach/reconcile), exact ProcessIdentity, requested composition where applicable, and a one-operation request correlation ID. A current-orphan reconcile with no known target-generation ID binds it atomically at coordinator acceptance and echoes the actual generation before completion. Self-reported PID/identity is consistency evidence only. AttachIds are never authentication.
+Authenticated messages carry/echo bounded operation kind, `AttemptAttachId` (the current explicit AttachAsync attempt when one exists), `TargetGenerationAttachId` (the generation acted upon; equal to `AttemptAttachId` on successful start and the old generation on detach/reconcile), exact target `ProcessIdentity`, the controller `ProcessIdentity` consistency field, requested composition where applicable, and a one-operation request correlation ID. A current-orphan reconcile with no known target-generation ID binds it atomically at coordinator acceptance and echoes the actual generation before completion. Self-reported PID/identity is consistency evidence only; OS-observed peer identity is authoritative. AttachIds are never authentication.
+
+Lifecycle authorization is explicit:
+
+| Operation | Coordinator acceptance condition |
+|---|---|
+| `StartGeneration` | Fresh rendezvous token, mutual peer binding, exact target identity, no current generation or a positively `Detached` record, and the cross-manager first-entry gate; it creates exactly one new generation. |
+| `DetachCurrentGeneration` | Fresh rendezvous token, exact current generation AttachId/ProcessIdentity, original `LifecycleOwnerProof`, mutually bound peers, and a live/stopping generation owned by that proof; it joins the one shared stop. |
+| `ReconcileCurrentOrphan` | Fresh rendezvous token, mutual peer binding, exact current target identity, independently recorded owner absence, and current `Orphaned`/eligible `Settling`/`CleanupUnknown` state; owner proof is required if the owner is still live. |
+
+A message with the right token but the wrong operation, generation, identity, peer, or lifecycle state is rejected and retires the endpoint; it is never converted into a lifecycle conflict or a stop-whatever operation.
 
 ### 12.3 Peer identity and ownership
 
-`NativeSpy.Transport.NamedPipes` owns only the low-level connected peer PID observation using `GetNamedPipeClientProcessId`. It knows no AttachId, expected target, or authorization policy. On the controller-created server endpoint, the connected target is the Named Pipe client. `NativeSpy.Attach.Windows` owns:
+`NativeSpy.Transport.NamedPipes` owns only the low-level connected-peer PID primitives. On the controller-created server endpoint, the connected target is the Named Pipe client and the controller observes it with `GetNamedPipeClientProcessId`. The target observes the connected controller server with the corresponding `GetNamedPipeServerProcessId` primitive. `NativeSpy.Attach.Windows` owns attach/security interpretation and requires mutual binding:
 
 ```text
-OS-observed client PID
-→ re-read exact ProcessIdentity for that PID
-→ compare with expected target ProcessIdentity
-→ continue only on exact match
+controller side:
+    OS-observed client PID
+    → re-read exact target ProcessIdentity
+    → compare with expected target ProcessIdentity
+
+target side:
+    OS-observed server PID
+    → re-read exact controller ProcessIdentity
+    → compare with the bounded controller identity field and
+       same-user/integrity policy
 ```
 
-Failure to obtain PID, read identity, or compare exact identity is fail-closed. Bootstrap-claimed PID/identity alone never authenticates the peer. The low-level primitive and production integration are B1, not A1.
+Both directions are required for a production rendezvous. Failure to obtain either peer PID, read either identity, compare either identity, or satisfy the SID/integrity policy is fail-closed. Bootstrap-claimed PID/identity alone never authenticates either peer. The low-level primitives and production integration are B1, not A1.
 
-The controller's rendezvous ACL is derived from its own actual primary SID and grants only the required controller/user, creator, and system principals; it does not inherit a broad Everyone/Anonymous default. The target derives AgentHost `AllowedUserSid` from its actual target primary token. Initial policy is equal SID and equal integrity; a same-user mismatch of integrity is `KnownUnsupported`. DACL/MIC/process access checks can still fail, and there is no automatic elevation.
+The controller's rendezvous ACL is derived from its own actual primary SID and grants only the required controller/user, creator, and system principals; it does not inherit a broad Everyone/Anonymous default. The target derives AgentHost `AllowedUserSid` from its actual target primary token. Initial policy is equal SID and target integrity not higher than controller integrity; a higher-integrity target is `KnownUnsupported`. DACL/MIC/process access checks can still fail, and there is no automatic elevation.
 
 ### Security threat outcomes
 
@@ -894,6 +908,8 @@ The controller's rendezvous ACL is derived from its own actual primary SID and g
 A compromised same-user process may cause denial of service by contending for a gate or exhausting bounded invalid attempts; it cannot gain a successful NativeSpy session or authorize a different generation by these mechanisms.
 
 ### 12.4 Secrets and non-secrets
+
+The roles are non-interchangeable: `AttachId` correlates an attempt/generation; the rendezvous token authenticates one short-lived attach-layer operation; the AgentHost bootstrap nonce authenticates the later I3 Hello; `LifecycleOwnerProof` authorizes the original generation owner to detach/reconcile; and OS-observed peer identities, SIDs, and integrity levels are evidence/policy rather than bearer credentials. No one material substitutes for another.
 
 | Material | Creator / scope | Transfer and validator | Lifetime/destruction | Public/reusable? |
 |---|---|---|---|---|
@@ -924,6 +940,35 @@ target application still running
 ```
 
 Complete unloading of all NativeSpy modules is not required; resident bootstrap may remain. `State == Closed` alone is insufficient if disposal failures were swallowed.
+
+The exact explicit-detach trigger chain is:
+
+```text
+1. AttachManager atomically claims Active → Detaching for the session's
+   AttachId, or joins the already-claimed shared operation. A caller wait
+   timeout/cancellation affects only that caller.
+2. The manager creates a fresh one-use lifecycle rendezvous and token and
+   supplies exact ProcessIdentity, target-generation AttachId, and the
+   private LifecycleOwnerProof. The controller-side endpoint performs the
+   mutual peer checks before accepting the operation.
+3. The strategy delivers `DetachCurrentGeneration` through target activation
+   into the resident coordinator. The coordinator atomically validates the
+   exact identity, current generation, owner proof, and live state.
+4. The first accepted trigger CASes `Live(A) → Stopping(A, ExplicitDetach)`;
+   if client loss already won, the request joins that same stop task instead.
+5. The coordinator invokes the one task-idempotent Host stop: stop new work,
+   close the Agent session/pipe, dispose CLR and framework composition, and
+   verify Host-owned closure. No callback is forcibly aborted.
+6. The coordinator clears A's roots/proof and returns an authenticated,
+   generation-tagged closure result. A target exit at any point returns
+   `TargetExited`; lack of positive closure returns `Settling`/`CleanupUnknown`.
+7. AttachManager accepts the result only with the current operation,
+   AttachId, exact ProcessIdentity, and generation checks; it commits the
+   cached `Detached`/`TargetExited` result and releases controller admission
+   only after that proof. It never returns the generation to `Attached`.
+```
+
+The exact client-loss trigger is analogous but begins with the exactly-once I3 `Completion` signal (`RemoteClosed`, `ProtocolFailure`, or `TransportFailure`): the resident coordinator independently records the authenticated owner as absent, CASes `Live(A) → Stopping(A, ClientLoss)` if no explicit detach won, and runs/joins the same stop task. `LocalDisposed` may cause this loss trigger but is never itself a successful detach. Explicit detach racing client loss therefore has one first cause and one stop task.
 
 Authoritative target lifecycle detach is delivered through a fresh one-use authenticated attach-layer lifecycle rendezvous naming exact AttachId and ProcessIdentity. Local client-pipe closure is not detach confirmation. Do not add `session.detach` to I3.
 
@@ -983,12 +1028,16 @@ A later valid AttachAsync is the sole public trigger for one bounded reconciliat
 
 ```text
 validate request; allocate fresh AttachId
-perform exactly one ReconcileAsync
-    closure positively proven → lifecycle Detached; fresh composition probe;
-                                continue same attempt only if Eligible
+perform the required fresh composition-specific probe
+perform exactly one ReconcileAsync for the current unknown generation
+    closure positively proven → lifecycle Detached; perform a NEW fresh
+                                composition probe; continue same attempt only
+                                if the new probe is Eligible
     target positively exited → TargetExited
     unresolved/timeout        → CleanupUnknown; no BeginAttachAsync/new Host
 ```
+
+The initial probe is required even when it is only diagnostic; it never replaces the reconciliation. The reconciliation uses fresh lifecycle authorization, mutual rendezvous peer binding, exact ProcessIdentity, and current-generation checks. A positive exit observation is supplied to the one reconciliation as a terminal fact rather than an excuse to start target work.
 
 No public `ReconcileAsync`, `ForceReset`, `ForgetHost`, `StartAnyway`, target kill, second Host, or endless polling. An already-running Settling operation causes same-manager fail-fast; no redundant reconciliation until it becomes CleanupUnknown.
 
@@ -1008,9 +1057,9 @@ current generation is Orphaned / eligible Settling / eligible CleanupUnknown
       one bounded current-orphan reconciliation
 ```
 
-“Owner live/absent” is the target coordinator's authenticated I3 owner-session state, not a PID claim in an ordinary probe. The controller process can remain alive after its client session is gone; the coordinator's independent loss observation, not process liveness assertion by the requester, is the prerequisite. Same-user policy, OS-observed peer PID→exact ProcessIdentity, fresh rendezvous token, exact target identity, and current-generation validation are all required. Knowing AttachId alone never authorizes recovery. The manager MUST perform the one reconciliation when its admitted attach observes an eligible orphan state; it is not optional.
+“Owner live/absent” is the target coordinator's authenticated I3 owner-session state, not a PID claim in an ordinary probe. The controller process can remain alive after its client session is gone; the coordinator's independent loss observation, not process liveness assertion by the requester, is the prerequisite. Same-user policy, mutual OS-observed peer PID→exact ProcessIdentity binding, fresh rendezvous token, exact target identity, and current-generation validation are all required. Knowing AttachId alone never authorizes recovery. The manager MUST perform the one reconciliation when its admitted attach observes an eligible orphan state; it is not optional.
 
-A current-orphan operation is atomically bound to the orphan generation at coordinator acceptance. It cannot stop a live B. If an A stop/reconcile already began, its task/result remains A-tagged and cannot publish state into B. A subsequent Attach attempt that observes an eligible orphan MUST separately reconcile the orphan current at its own atomic acceptance point; that is a new operation, not reuse of A's result.
+A current-orphan operation is atomically bound to the orphan generation at coordinator acceptance. It cannot stop a live B. If an A stop/reconcile already began, its task/result remains A-tagged and cannot publish state into B. A subsequent Attach attempt that observes an eligible orphan MUST use its own fresh one-use rendezvous and one bounded reconciliation for the orphan current at its own atomic acceptance point; it is a new operation, not reuse of A's result. A stale A response is rejected even if it arrives after B has started.
 
 ---
 
@@ -1198,7 +1247,7 @@ Probe limitations are at most 16 fixed enum values. No `Exception.ToString()`, s
 |---|---|---|---|---|
 | Probe complete | Immutable evidence; local query handles | AttachManager; close observations | Unsupported/Unknown/timeout; no target residue | Yes after operation release |
 | Validated target binding | Strategy-private process object | AttachManager directs strategy to close it | Access/identity failure; no public handle | Yes after Detached |
-| Entry gate acquired | Same-user `Global\` named mutex | AttachManager operation; strategy releases only after coordinator admission/rejection or safe settlement | Contention `AttachInProgress`; abandoned ambiguity `CleanupUnknown` | Only after gate/lifecycle evidence |
+| Entry gate acquired | Same-user `Local\` named mutex | AttachManager operation; strategy releases only after coordinator admission/rejection or safe settlement | Contention `AttachInProgress`; abandoned ambiguity `CleanupUnknown` | Only after gate/lifecycle evidence |
 | Native/process entry begun | Native-entry resources, possible executing target entry | AttachManager tracks; strategy cleans its own resources; coordinator owns any admitted generation | Failure/timeout; no force-abort; uncertain entry blocks | Only after positive closure or target exit |
 | Rendezvous created | Controller endpoint + fresh token | AttachManager/strategy for this attempt; close endpoint and zero token | `RendezvousFailed`/timeout; no persistent channel | Yes only when no target effect or closure proven |
 | Target bootstrap reached, not admitted | Bootstrap attempt and endpoint | AttachManager; target startup expiry/one-shot failure cleanup | Typed bootstrap failure; bounded bootstrap residue only | After Detached proof; else blocked |
@@ -1222,9 +1271,9 @@ A timeout or caller cancellation never frees the gate by assumption. A controlle
 
 | Race | Deterministic outcome |
 |---|---|
-| Two same-manager attaches to same target | First claims operation; second gets fresh AttachId + `AttachInProgress`, no probe |
+| Two same-manager attaches to same target | First claims operation; both valid calls perform fresh probes; the second gets fresh AttachId + `AttachInProgress` and cannot queue or enter |
 | Different targets attach concurrently | Independent state/gates |
-| Two managers race first entry from any Windows sessions | Canonical `Global\` mutex admits one; loser fails fast; winner checks coordinator before Host start |
+| Two same-user managers race first entry in one Windows session | Canonical `Local\` mutex admits one; loser fails fast; winner checks coordinator before Host start |
 | Attach A cancelled while bootstrap later completes | A cannot publish; manager tracks late result and requests shared cleanup; A remains blocking until settlement; A result cannot commit to B |
 | Detach A races client pipe loss | Coordinator CAS chooses one initial cause and one shared stop task; later trigger joins |
 | Detach caller times out, Host closes one millisecond later | Caller gets non-authoritative Settling timeout; shared result becomes/caches Detached; next call observes Detached |
@@ -1250,7 +1299,7 @@ The repository's PID-only FlaUI attach must be corrected in E0/E1 with an exact-
 
 ### 20.2 WinForms boundary
 
-`NativeSpy.Attach` contracts remain framework-neutral. `NativeSpy.Attach.Windows` owns OS probing, rendezvous, and native entry, not WinForms semantics. Client-side detached WinForms correlation remains in `NativeSpy.Client`; target-side evidence remains `NativeSpy.Agent.WinForms`.
+`NativeSpy.Attach` contracts remain framework-neutral. `NativeSpy.Attach.Windows` owns OS probing, rendezvous, and native entry, not WinForms semantics. Client-side detached WinForms correlation remains in `NativeSpy.Client`; target-side evidence remains `NativeSpy.Agent.WinForms`; `NativeSpy.Agent.Host.WinForms` is the separate target-side Host/bootstrap composition that currently requires a Control.
 
 Current real-target problems remain explicit I5 requirements, not A0/A1 solutions:
 
@@ -1266,11 +1315,11 @@ E0 defines architecture; E1 implements an arbitrary supported WinForms target wi
 
 ### 20.3 Windows documented facts versus inference
 
-- `GetNamedPipeClientProcessId` returns the connected client PID, not authenticated application identity or process incarnation. Attach must reread exact ProcessIdentity. [Microsoft API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid)
+- `GetNamedPipeClientProcessId` returns the connected client PID, not authenticated application identity or process incarnation; the corresponding server-PID observation is used in the reverse direction. Attach must reread exact ProcessIdentity in both directions. [Client PID API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid), [Server PID API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid)
 - Named-pipe security descriptors control DACL access; default ACLs are not the required same-user policy. MIC is an additional access check. [Named pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights), [MIC](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)
 - `IsWow64Process2` reports process/native machine values and documents required query rights. `OpenProcess`/token APIs can fail due process security/access checks; no universal access guarantee exists. [Process access](https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights)
 - PSAPI module enumeration/path APIs report module observations and have documented failure/race limitations; they do not establish application TFM, deployment model, or by themselves prove runtime identity/version. Any support threshold is NativeSpy policy; A1 returns `Unknown` when observed evidence cannot reliably bind runtime identity/version. [EnumProcessModulesEx](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-enumprocessmodulesex), [GetModuleFileNameEx](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getmodulefilenameexw)
-- MIC can block lower-integrity writes despite a DACL. The equal-integrity rule is our conservative scope policy, not a general platform necessity.
+- MIC can block a particular operation despite a DACL. The target-not-higher integrity rule is our conservative scope policy, not a general platform necessity.
 
 ### 20.4 .NET hosting and TFM facts
 
@@ -1307,7 +1356,7 @@ I4b    Object Browser foundation
 I6     WPF target support
 ```
 
-Do not collapse milestones. C0/C1 process entry is separate from D runtime compatibility and E WinForms execution-context discovery. I5 is not complete until arbitrary supported WinForms applications work without supplying NativeSpy a Form or Control.
+Do not collapse milestones. B1 cooperative activation/wake-up is a real cooperative path, not C1 native process entry. C0/C1 process entry is separate from D runtime compatibility and E WinForms execution-context discovery. I5 is not complete until arbitrary supported WinForms applications work without supplying NativeSpy a Form or Control.
 
 Known debt placement:
 
@@ -1355,7 +1404,7 @@ ProcessIdentity comparer and reader-compatible validation
 AttachId allocation/result correlation
 composition-ID and adapter-ID validation
 TargetRuntimeIdentity and structured numeric version
-architecture/runtime/composition/security dispositions
+Windows desktop-platform floor and architecture/runtime/composition/security dispositions
 ProbeOutcome and overall eligibility
 bounded diagnostics and bounded capabilities
 AttachTimeouts finite validation
@@ -1367,9 +1416,9 @@ AttachManager state, serialization, publication and stale-result guards
 CleanupUnknown bounded reconciliation semantics with fakes
 task-idempotent fake detach and per-AttachId shared result semantics
 client-terminal callback generation guard
-cross-manager Global first-entry mutex and canonical-name tests
+cross-manager Local first-entry mutex and canonical-name tests
 private validated-target seam and fake binding
-read-only Windows architecture/runtime/token/security probe
+read-only Windows platform/architecture/runtime/token/security probe
 fakes and deterministic tests in §23
 ```
 
@@ -1389,6 +1438,8 @@ production GetNamedPipeClientProcessId rendezvous integration
 LifecycleOwnerProof target storage/validation
 AgentHost changes (including StopAsync)
 Agent/Host payload TFM redesign or runtime-specific payload strategy
+cooperative target activation/wake-up or production rendezvous wire
+production C1 native process entry or native bootstrap
 arbitrary WinForms execution-context discovery
 ObjectSpy attach or FlaUI exact-incarnation integration
 process-picker UX
@@ -1417,13 +1468,15 @@ same-handle validated-target seam; PID-only reopen prohibited
 exact ProcessIdentity required; PID alone never authorizes
 neutral probe => NotRequested + Unknown overall
 composition-specific probe and exact winforms ID semantics
-fresh composition-specific probe on every admitted AttachAsync path
-Attached => AlreadyAttached without another probe
-Probing/Bootstrapping/Connecting/Detaching/Settling => AttachInProgress without probe
+fresh composition-specific probe on every valid AttachAsync, including conflicts
+complete probe-result × lifecycle-state matrix, including CleanupUnknown and TargetExited
+Attached => fresh probe, then AlreadyAttached; no strategy
+Probing/Bootstrapping/Connecting/Detaching/Settling => fresh probe, then AttachInProgress
+TargetExited => fresh probe, then TargetExited; PID reuse cannot retarget
 stale standalone probe cannot authorize entry
 UnsupportedComposition => no BeginAttachAsync
 Unknown eligibility => no BeginAttachAsync
-CleanupUnknown => exactly one reconcile before fresh probe; no Begin before closure
+CleanupUnknown => fresh probe, exactly one reconcile, then a NEW fresh probe only after closure; no Begin before closure
 orphan advisory → ReconcileAsync proves Detached => fresh second probe in the
   same attempt; proceed only when that probe is Eligible
 orphan advisory becomes live Attached before reconcile acceptance =>
@@ -1442,6 +1495,11 @@ orphan reconciliation proves target exit => TargetExited / Reconciliation,
   PostFailureLifecycle TargetExited, Begin = 0
 rendezvous authentication failure during reconciliation =>
   RendezvousFailed / Rendezvous, never a lifecycle conflict
+mutual rendezvous peer binding: client PID→target identity and server PID→controller identity
+peer PID/identity failure in either direction => fail closed
+cooperative B1 activation/wake-up is distinct from C1 production native entry
+one-use rendezvous token roles and lifecycle authorization are not interchangeable
+explicit detach trigger chain has one shared stop task and positive closure gate
 orphan reconciliation is mandatory once when its authorization conditions hold
 probe timeout typed; caller probe cancellation OCE
 insufficient/unbound real runtime evidence => RuntimeSupport Unknown
@@ -1450,15 +1508,19 @@ Framework CLR uses no weaker evidence standard than CoreCLR
 trustworthy evidence of incompatible family/version => KnownUnsupported
 fake KnownSupported runtime path exercises manager behavior
 no filename/command-line/environment/TFM-only runtime support
+Windows desktop 10.0.16299+ on native AMD64 => platform may be supported
+Windows Server or pre-1709 Windows => KnownUnsupported
+unknown Windows desktop/SKU/version evidence => Unknown
 AMD64 controller + x64 target + AMD64 Windows => architecture may be supported
 x86/ARM64/other target or non-AMD64 Windows => KnownUnsupported when identified
 unknown architecture evidence => Unknown
 x64-emulated target on ARM64 Windows => KnownUnsupported
-Detached attach, same SID + same integrity => security may be KnownSupported,
-  subject to all other eligibility dimensions
+IsWow64Process2 unavailable on the supported floor => no architecture fallback; Unknown or AccessDenied; below-floor OS is KnownUnsupported
+Detached attach, same SID + target integrity equal/lower than controller =>
+  security may be KnownSupported, subject to all other eligibility dimensions
 Detached attach, different SID => KnownUnsupported +
   UnsupportedSecurityContext / Probe + no strategy invocation
-Detached attach, same SID/different integrity => KnownUnsupported +
+Detached attach, same SID + higher target integrity => KnownUnsupported +
   UnsupportedSecurityContext / Probe + no strategy invocation
 token access denied => AccessDenied / Probe + no strategy invocation
 security evidence inconclusive without access denial =>
@@ -1470,13 +1532,13 @@ security evidence inconclusive without access denial =>
 ```text
 valid AttachId ordering; invalid request gets none
 fresh distinct AttachId for every valid failed attempt including fail-fast
-per AttachAsync: ReconcileAsync 0/1 and BeginAttachAsync 0/1, never retry
+per AttachAsync: fresh probe always; ReconcileAsync 0/1 and BeginAttachAsync 0/1, never retry
 same-target attach fail-fast in each required state
 Attached => AlreadyAttached; active transient => AttachInProgress
-CleanupUnknown => one reconciliation and no Host until closure proof
+CleanupUnknown => fresh probe, one reconciliation, and no Host until closure proof
 different-target independence
-cross-manager Global mutex contention/fail-fast across Windows sessions
-canonical Global gate bytes/name equality; exact case-sensitive start text
+cross-manager Local mutex contention/fail-fast in one Windows session
+canonical Local gate bytes/name equality; exact case-sensitive start text
 restrictive same-user mutex DACL; mutex does not authenticate target
 abandoned gate never implies safe entry; only positive Detached proof permits
 TargetExited operation table for Probe/Attach/Detach/old session state
@@ -1486,6 +1548,7 @@ stale A strategy/connector/completion result cannot affect B
 successful reattach produces fresh AttachId, Agent SessionId, fake CLR session,
   registries, composition, adapter; old surfaces remain terminal
 manager disposal during probe, attach, active session, detach
+bounded terminal capsule; no unbounded historical session registry
 ```
 
 ### Cancellation, timeouts, detach, and session surfaces
@@ -1523,8 +1586,9 @@ bounded capability count/ID validation and duplicate rejection
 ### Recovery, security, and diagnostics
 
 ```text
-locally known CleanupUnknown reconciliation proves Detached / remains unknown /
-  target exits; unresolved or timeout returns its existing CleanupUnknown mapping
+locally known CleanupUnknown performs a fresh probe, then exactly one reconciliation;
+  closure causes a fresh second probe, unresolved/timeout returns CleanupUnknown,
+  and target exit returns TargetExited
 orphan advisory -> ReconcileAsync proves Detached => fresh second probe in same
   attempt; proceeds only when Eligible
 orphan advisory becomes live Attached before reconcile acceptance =>
@@ -1548,6 +1612,7 @@ knowledge/guess of AttachId alone grants no operation
 stale A reconcile cannot affect B
 rendezvous secret, owner proof, and AttachId are distinct
 controller creates rendezvous server; target connects as pipe client
+controller observes target client PID and target observes controller server PID
 wrong-secret attempt bound, correct-secret identity mismatch retires endpoint
 peer PID failure/identity reread mismatch → RendezvousPeerVerificationFailed /
   Rendezvous; fail closed, including during reconciliation
@@ -1579,6 +1644,12 @@ A1 leaves only private implementation details open:
 | Foreign orphan reconciliation rule | Security/lifecycle | Yes: live client rejects; independent loss + fresh auth required | No choice remains |
 | Exact stronger runtime evidence needed to authorize real entry | Support; C0-owned | A1 returns Unknown when evidence does not prove identity/version | No A1 heuristic choice |
 | WinForms ownership | Module ownership | Yes: client/agent composition split | No choice remains |
+| Fresh probe on every valid AttachAsync and the probe-result × lifecycle matrix | Public lifecycle/support | Yes: §5.4, including conflict and terminal paths | No choice remains |
+| Windows desktop 1709+/AMD64 floor and mandatory IsWow64Process2 source | Platform scope | Yes: §1 and §6.1; no architecture fallback | No choice remains |
+| One-use rendezvous creation, activation/wake-up split, token roles, and mutual peer binding | Security/ownership | Yes: §§12.1–12.4 | No choice remains |
+| Explicit detach trigger chain and one shared stop task | Lifecycle | Yes: §§13.1–13.2 | No choice remains |
+| B1 cooperative activation versus C1 production native entry | Iteration boundary | Yes: §§12.1 and 21 | No choice remains |
+| Bounded manager/session terminal capsules without historical registry | Lifecycle/storage | Yes: §§7.3, 9.2, and 10.2 | No choice remains |
 
 Adversarial answers:
 
@@ -1589,7 +1660,7 @@ Can AttachId authenticate? No; separate rendezvous token/owner proof.
 Can a foreign manager stop a live session? No.
 Can CleanupUnknown start a second Host before closure proof? No.
 Can CleanupUnknown recover? One bounded attach-triggered reconciliation or target exit.
-Does local AlreadyAttached/AttachInProgress require an unnecessary probe? No; it is an authoritative fail-fast path.
+Does a valid local AlreadyAttached/AttachInProgress call skip its required probe? No; every valid AttachAsync performs a fresh composition-specific probe, then returns the authoritative conflict without strategy.
 Can caller cancellation leave untracked attach? No; strategy invocation is tracked and cleanup is manager-owned.
 Can caller receive both OCE and AttachSession? No; publication linearization decides.
 Can Dispose claim target detach? No.
@@ -1598,7 +1669,7 @@ Can stale A callbacks/results mutate B? No NativeSpy state adoption/publication 
 Can neutral/Unknown support invoke target entry? No.
 Can runtime support be invented from name/TFM/command line? No; A1 reports family/version evidence separately and returns Unknown when identity/version is not reliably bound; C0 owns the real-entry evidence threshold.
 Does runtime support imply payload compatibility? No.
-Can different integrity accidentally use the rendezvous? No; equality required before support.
+Can a higher-integrity target accidentally use the rendezvous? No; target integrity must not exceed controller integrity before support.
 Is I3 deadline explicit and manager-owned? Yes, one end-to-end I3HandshakeTimeout.
 Are gate bytes canonical? Yes, exact binary encoding in §10.1.
 Are public AttachSession states and adapter lookup frozen? Yes, §7.3–7.4.
@@ -1606,6 +1677,32 @@ Does TargetExited behavior cover all public operations? Yes, §9.5.
 Can future WPF/x86/modern runtime support preserve identity semantics? Yes; additions are strategies/support values, not identity rewrites.
 Does A1 require an owner-level choice? No; see the tables and exact allowlist above.
 ```
+
+### 24.1 Luna-discretion audit
+
+The following decisions are fully frozen by A0 even though an implementer might otherwise mistake them for private discretion: every valid attach probe and its complete lifecycle matrix; the Windows desktop/1709+/AMD64 floor and mandatory `IsWow64Process2` evidence; the `winforms` composition and `Agent.Host.WinForms` versus `Agent.WinForms` ownership; one-use rendezvous creation, activation/wake-up ownership, token roles, lifecycle authorization, mutual peer binding, and fail-closed retirement; the exact detach trigger chain; B1 cooperative versus C1 production entry; one reconciliation budget; stale-generation isolation; and bounded terminal capsules with no historical registry. A1 may choose only the implementation mechanisms that preserve those semantics.
+
+### 24.2 Seventeen-point self-review
+
+This is an internal completeness check, not independent closure:
+
+1. **Baseline and scope:** production facts remain anchored to `c02fbb...`; only this document is changed. **PASS**
+2. **Initial platform floor:** desktop Windows 10 1709+, native AMD64, x64 processes, .NET 10 CoreCLR, WinForms, already-running targets; Server/ARM64 are excluded. **PASS**
+3. **Project graph:** `Agent.Host.WinForms` is present and distinct from `Agent.WinForms`; attach dependency direction is explicit. **PASS**
+4. **Exact identity:** PID plus ordinal start identity is used everywhere; PID-only retargeting is forbidden. **PASS**
+5. **Validated binding:** pre-entry identity is reread from the retained process object; PID reopen is not authorization. **PASS**
+6. **Fresh probing:** every valid attach performs a fresh composition-specific probe, including conflicts and terminal records. **PASS**
+7. **Probe matrix:** probe outcomes × `Detached`, all transition states, `Attached`, `CleanupUnknown`, and `TargetExited` have deterministic results. **PASS**
+8. **Support evidence:** unknown/unsupported dimensions never invoke strategy; runtime evidence is separate from payload/entry compatibility. **PASS**
+9. **Lifecycle concurrency:** same-target calls fail fast, cross-manager first entry is gated, and the resident coordinator is the one-generation authority. **PASS**
+10. **Generation isolation:** AttachId, ProcessIdentity, Agent SessionId, owner proof, and operation identity have distinct roles and stale-result guards. **PASS**
+11. **Cancellation/timeouts:** caller cancellation is OCE; stage, detach wait, detach operation, cleanup settlement, and reconciliation budgets are distinct. **PASS**
+12. **Detach/dispose:** the explicit trigger chain, client-loss race, Dispose linearization, and positive closure requirement are frozen. **PASS**
+13. **Bounded retention:** session/manager/coordinator terminal metadata is fixed-size and no unbounded historical registry exists. **PASS**
+14. **Rendezvous security:** one-use endpoint/token, four-invalid-attempt bound, correct-secret retirement, lifecycle authorization, mutual peer binding, and fail-closed behavior are explicit. **PASS**
+15. **Recovery:** CleanupUnknown has one valid-attach reconciliation trigger; orphan recovery is current-generation-only and stale A cannot affect B. **PASS**
+16. **Iteration boundary:** A1 has semantic foundations/fakes only; B1 cooperative activation and C1 production native entry remain separate. **PASS**
+17. **A1 reviewability:** allowlist, prohibitions, deterministic tests, Luna audit, diagnostics, and deferred owners are documented; independent review is still required. **PASS**
 
 Remaining owner decisions for I5-A1: none. Later B0/C0/D0/E0/F/G choices remain owned by those iterations. This document is ready for independent closure review, not self-declared closed.
 
@@ -1616,6 +1713,7 @@ Remaining owner decisions for I5-A1: none. Later B0/C0/D0/E0/F/G choices remain 
 Verified current Microsoft Learn pages relevant to normative platform claims:
 
 - [GetNamedPipeClientProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid)
+- [GetNamedPipeServerProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid)
 - [Named Pipe Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
 - [Mandatory Integrity Control](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)
 - [IsWow64Process2](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-iswow64process2)
@@ -1651,6 +1749,11 @@ F-10  finite timeout validation                              §11.1
 F-11  typed connector failures                                §§8.2, 17
 F-12  normalized outer failure taxonomy                       §§17.1–17.3
 F-13  exact failure-to-state mapping and PostFailureLifecycle §§7.1, 17.2, 18
+F-14  fresh probe × lifecycle matrix and conflict/terminal probing          §5.4, §§9.2–9.5, 23, 24
+F-15  Windows desktop 1709+/AMD64 floor and mandatory IsWow64Process2    §§1, 6.1, 23
+F-16  cooperative activation/C1 entry split, rendezvous roles, mutual
+      peer binding, lifecycle authorization, and detach trigger chain     §§12–14, 21, 23, 24
+F-17  bounded manager/session terminal metadata without historical map     §§7.3, 9.2, 10.2, 15, 23, 24
 ```
 
 **End of I5-A0 specification.**
